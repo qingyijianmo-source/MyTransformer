@@ -22,8 +22,9 @@ Training the custom model does not modify the accurate document translator. Fine
 - `.docx`, `.txt`, `.md`, and `.markdown` document input.
 - DOCX paragraph, heading, list, table, image, header, and footer preservation.
 - CUDA FP16 batches and 5-beam decoding.
-- Sentence-aware and token-aware long-text chunking.
+- Paragraph-first contextual translation; oversized paragraphs are grouped at sentence and token boundaries.
 - Separate terminology rules in `glossary.json` and `glossary.en_zh.json`.
+- Source-aware English→Chinese disambiguation for dangerous polysemy and literal idioms.
 - JSONL document cache for interruption recovery.
 - Foreground fine-tuning monitor with loss, progress, VRAM, and ETA.
 - A held-out quality gate that rejects regressing checkpoints.
@@ -81,7 +82,7 @@ Then click **训练增强模型…** in the GUI or run:
 .\start_accurate_finetune_en_zh.cmd
 ```
 
-Each direction has an RTX 4060 8GB profile using 12,000 filtered training pairs, 256 held-out validation pairs, FP16, an effective batch size of 32, and 200 optimizer steps. A candidate checkpoint is promoted only when held-out validation loss does not regress against that direction's pinned base model.
+Each direction has an RTX 4060 8GB profile using 12,000 filtered training pairs, 256 held-out validation pairs, FP16, an effective batch size of 32, and 20 epochs (7,500 optimizer steps). Validation runs after every epoch; the best epoch is retained and promoted only when it does not regress against the accepted starting checkpoint.
 
 Fine-tuned weights are stored separately in `output/accurate_finetuned/best` and `output/accurate_finetuned_en_zh/best`; both are intentionally excluded from Git.
 
@@ -113,7 +114,7 @@ python smoke_test.py
 
 ## Known limits
 
-- Very long documents are translated in segments, so cross-paragraph context is limited.
+- Each paragraph keeps its context whenever it fits; oversized paragraphs and cross-paragraph references remain limited by the model context window.
 - PDF, scanned OCR input, complex text boxes, and footnotes are not yet supported.
 - High-risk legal, medical, or contractual translations still require human review.
 - Model checkpoints are not stored in Git; the base model is downloaded on first use.

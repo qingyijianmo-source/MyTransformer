@@ -9,6 +9,7 @@ checkpoint when it does not regress.  Progress is printed live and mirrored to
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import math
@@ -473,6 +474,7 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         resume_dir = settings.output_dir / "resume"
         candidate_dir = settings.output_dir / "candidate"
         best_dir = settings.output_dir / "best"
+        run_best_dir = settings.output_dir / "run_best"
         if fresh and resume_dir.exists():
             safe_reset_directory(resume_dir, settings.output_dir)
         resume_state_path = resume_dir / "trainer_state.pt"
@@ -487,6 +489,8 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             else:
                 logger.write("已有断点与当前配置不兼容，将忽略该断点")
         if resume_state is None:
+            if run_best_dir.exists():
+                shutil.rmtree(run_best_dir)
             accepted_best = False
             best_manifest_path = best_dir / "training_manifest.json"
             if (
@@ -598,6 +602,24 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             if "scaler" in resume_state:
                 scaler.load_state_dict(resume_state["scaler"])
 
+        best_epoch_validation_loss = base_validation_loss
+        best_epoch = 0
+        best_epoch_step = 0
+        epoch_history: list[dict[str, object]] = []
+        if resume_state:
+            best_epoch_validation_loss = float(
+                resume_state.get("best_epoch_validation_loss", base_validation_loss)
+            )
+            best_epoch = int(resume_state.get("best_epoch", 0))
+            best_epoch_step = int(resume_state.get("best_epoch_step", 0))
+            epoch_history = list(resume_state.get("epoch_history", []))
+            if best_epoch_step and not (run_best_dir / "config.json").is_file():
+                logger.write("断点中的轮次最佳权重缺失，将重新跟踪最佳轮次")
+                best_epoch_validation_loss = base_validation_loss
+                best_epoch = 0
+                best_epoch_step = 0
+                epoch_history = []
+
         optimizer.zero_grad(set_to_none=True)
         train_iterator = iter(train_loader)
         recent_loss = 0.0
@@ -653,6 +675,47 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
                 recent_loss = 0.0
                 recent_micro_steps = 0
 
+            if step % steps_per_epoch == 0 or step == total_steps:
+                current_epoch = (
+                    min(settings.num_epochs, math.ceil(step / steps_per_epoch))
+                    if settings.num_epochs > 0
+                    else math.ceil(step / steps_per_epoch)
+                )
+                logger.write(f"第 {current_epoch} 轮完成，正在执行独立验证…")
+                epoch_validation_loss = evaluate_loss(
+                    model,
+                    validation_loader,
+                    device,
+                    use_amp,
+                    logger,
+                    f"第 {current_epoch} 轮验证",
+                )
+                epoch_history.append(
+                    {
+                        "epoch": current_epoch,
+                        "step": step,
+                        "validation_loss": epoch_validation_loss,
+                    }
+                )
+                if epoch_validation_loss < best_epoch_validation_loss:
+                    best_epoch_validation_loss = epoch_validation_loss
+                    best_epoch = current_epoch
+                    best_epoch_step = step
+                    safe_reset_directory(run_best_dir, settings.output_dir)
+                    model.save_pretrained(run_best_dir, safe_serialization=True)
+                    logger.write(
+                        f"第 {current_epoch} 轮刷新最佳验证损失："
+                        f"{best_epoch_validation_loss:.5f}，已保留该轮权重"
+                    )
+                else:
+                    logger.write(
+                        f"第 {current_epoch} 轮验证损失 {epoch_validation_loss:.5f}；"
+                        f"当前最佳仍为第 {best_epoch} 轮 "
+                        f"{best_epoch_validation_loss:.5f}"
+                    )
+                model.train()
+                model.config.use_cache = False
+
             if step % settings.checkpoint_steps == 0 and step < total_steps:
                 save_resume_checkpoint(
                     model,
@@ -666,6 +729,10 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
                         "config_hash": settings.config_hash,
                         "base_validation_loss": base_validation_loss,
                         "base_samples": base_samples,
+                        "best_epoch_validation_loss": best_epoch_validation_loss,
+                        "best_epoch": best_epoch,
+                        "best_epoch_step": best_epoch_step,
+                        "epoch_history": epoch_history,
                     },
                     logger,
                 )
@@ -675,9 +742,25 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         if hasattr(model, "gradient_checkpointing_disable"):
             model.gradient_checkpointing_disable()
         model.config.use_cache = True
-        logger.write("训练完成，正在执行独立验证集质量门控…")
-        candidate_validation_loss = evaluate_loss(
-            model, validation_loader, device, use_amp, logger, "增强后验证"
+        logger.write("全部训练轮次完成，正在选取验证集表现最佳的轮次…")
+        if best_epoch_step and best_epoch_step != total_steps:
+            del optimizer, scheduler, scaler
+            model.to("cpu")
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                run_best_dir, torch_dtype=torch.float16
+            ).to(device)
+            model.eval()
+            model.config.use_cache = True
+            logger.write(
+                f"已恢复第 {best_epoch}/{settings.num_epochs} 轮的最佳权重"
+            )
+        candidate_validation_loss = (
+            best_epoch_validation_loss
+            if best_epoch_step
+            else float(epoch_history[-1]["validation_loss"])
         )
         candidate_samples = generate_samples(
             model,
@@ -719,6 +802,8 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             },
             "steps_per_epoch": steps_per_epoch,
             "actual_total_steps": total_steps,
+            "selected_epoch": best_epoch if best_epoch_step else settings.num_epochs,
+            "epoch_validation_history": epoch_history,
             "data": data_stats,
             "examples": [
                 {
@@ -737,10 +822,14 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             promote_candidate(candidate_dir, best_dir, settings.output_dir)
             if resume_dir.exists():
                 shutil.rmtree(resume_dir)
+            if run_best_dir.exists():
+                shutil.rmtree(run_best_dir)
             logger.write(f"质量门控通过，增强模型已启用：{best_dir}")
             logger.write("请在翻译界面点击“重新加载模型”，或重启翻译界面。")
             return 0
 
+        if run_best_dir.exists():
+            shutil.rmtree(run_best_dir)
         logger.write("质量门控未通过：候选权重已保留，但当前翻译器继续使用原模型。")
         return 4
     except KeyboardInterrupt:

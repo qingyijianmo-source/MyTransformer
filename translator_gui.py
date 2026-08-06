@@ -35,7 +35,7 @@ DIRECTION_NAMES = {value: key for key, value in DIRECTION_LABELS.items()}
 class TranslatorApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("MyTransformer 高精度中英文互译 / 文档翻译")
+        self.root.title("MyTransformer 中英文互译 / 文档翻译（上下文增强版）")
         self.root.geometry("1280x820")
         self.root.minsize(920, 620)
         self.events: queue.Queue[tuple] = queue.Queue()

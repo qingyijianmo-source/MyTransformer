@@ -64,11 +64,13 @@ class TranslatorSettings:
     revision: Optional[str]
     fine_tuned_model_dir: Optional[str]
     glossary_file: Optional[str]
+    context_rules_file: Optional[str]
     target_prefix: str
     device: str
     batch_size: int
     num_beams: int
     length_penalty: float
+    repetition_penalty: float
     no_repeat_ngram_size: int
     max_source_tokens: int
     max_new_tokens: int
@@ -89,11 +91,13 @@ class TranslatorSettings:
             revision=merged.get("revision") or None,
             fine_tuned_model_dir=merged.get("fine_tuned_model_dir") or None,
             glossary_file=merged.get("glossary_file") or None,
+            context_rules_file=merged.get("context_rules_file") or None,
             target_prefix=str(merged.get("target_prefix", "")),
             device=str(merged.get("device", "auto")),
             batch_size=max(1, int(merged.get("batch_size", 16))),
             num_beams=max(1, int(merged.get("num_beams", 5))),
             length_penalty=float(merged.get("length_penalty", 1.0)),
+            repetition_penalty=max(1.0, float(merged.get("repetition_penalty", 1.0))),
             no_repeat_ngram_size=max(0, int(merged.get("no_repeat_ngram_size", 3))),
             max_source_tokens=max(32, int(merged.get("max_source_tokens", 384))),
             max_new_tokens=max(32, int(merged.get("max_new_tokens", 512))),
@@ -155,6 +159,7 @@ class AccurateTranslator:
         self.settings = TranslatorSettings.from_file(self.config_path, self.direction)
         self.progress = progress
         self.glossary = self._load_glossary()
+        self.context_rules = self._load_context_rules()
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
         self.device = self._select_device(self.settings.device)
         model_source, revision, model_fingerprint = self._resolve_model_source()
@@ -181,15 +186,17 @@ class AccurateTranslator:
             torch.backends.cuda.matmul.allow_tf32 = True
         signature_source = json.dumps(
             {
-                "pipeline_version": 7,
+                "pipeline_version": 8,
                 "direction": self.direction,
                 "model": model_source,
                 "model_fingerprint": model_fingerprint,
                 "revision": revision,
                 "beams": self.settings.num_beams,
                 "length_penalty": self.settings.length_penalty,
+                "repetition_penalty": self.settings.repetition_penalty,
                 "no_repeat_ngram_size": self.settings.no_repeat_ngram_size,
                 "glossary": self.glossary,
+                "context_rules": self.context_rules,
             },
             sort_keys=True,
         )
@@ -276,6 +283,81 @@ class AccurateTranslator:
                 glossary[source] = {"target": target, "aliases": aliases}
         return glossary
 
+    def _load_context_rules(self) -> list[dict[str, object]]:
+        """Load source-aware lexical rewrites and guarded output repairs."""
+
+        configured = self.settings.context_rules_file
+        if not configured:
+            return []
+        path = Path(configured)
+        if not path.is_absolute():
+            path = (self.config_path.parent / path).resolve()
+        if not path.is_file():
+            return []
+        with path.open("r", encoding="utf-8") as file:
+            values = json.load(file)
+        if not isinstance(values, list):
+            raise ValueError(f"上下文消歧规则必须是 JSON 数组：{path}")
+        rules: list[dict[str, object]] = []
+        for index, raw_rule in enumerate(values, start=1):
+            if not isinstance(raw_rule, dict):
+                raise ValueError(f"上下文消歧规则 #{index} 必须是对象")
+            source = str(raw_rule.get("source", "")).strip()
+            target = str(raw_rule.get("target", "")).strip()
+            rewrite = str(raw_rule.get("rewrite", source)).strip()
+            if not source or not target or not rewrite:
+                raise ValueError(f"上下文消歧规则 #{index} 缺少 source、rewrite 或 target")
+            rules.append(
+                {
+                    "source": source,
+                    "rewrite": rewrite,
+                    "target": target,
+                    "aliases": [
+                        str(value)
+                        for value in raw_rule.get("aliases", [])
+                        if str(value)
+                    ],
+                    "when_any": [
+                        str(value).casefold()
+                        for value in raw_rule.get("when_any", [])
+                        if str(value)
+                    ],
+                    "unless_any": [
+                        str(value).casefold()
+                        for value in raw_rule.get("unless_any", [])
+                        if str(value)
+                    ],
+                }
+            )
+        return rules
+
+    @staticmethod
+    def _source_term_pattern(source: str) -> re.Pattern[str]:
+        return re.compile(rf"(?<!\w){re.escape(source)}(?!\w)", flags=re.IGNORECASE)
+
+    def _apply_context_rules(self, text: str) -> tuple[str, dict[str, str]]:
+        """Disambiguate only when both the source term and its context match."""
+
+        rewritten = text
+        original_folded = text.casefold()
+        replacements: dict[str, str] = {}
+        for rule in self.context_rules:
+            source = str(rule["source"])
+            pattern = self._source_term_pattern(source)
+            if pattern.search(rewritten) is None:
+                continue
+            when_any = list(rule["when_any"])
+            unless_any = list(rule["unless_any"])
+            if when_any and not any(value in original_folded for value in when_any):
+                continue
+            if any(value in original_folded for value in unless_any):
+                continue
+            rewritten = pattern.sub(str(rule["rewrite"]), rewritten)
+            target = str(rule["target"])
+            for alias in rule["aliases"]:
+                replacements[str(alias)] = target
+        return rewritten, replacements
+
     def _protect_glossary(self, text: str) -> tuple[str, dict[str, str]]:
         protected = text
         replacements: dict[str, str] = {}
@@ -341,7 +423,9 @@ class AccurateTranslator:
     def _token_count(self, text: str) -> int:
         return len(
             self.tokenizer.encode(
-                self.settings.target_prefix + text, add_special_tokens=False
+                self.settings.target_prefix + text,
+                add_special_tokens=False,
+                verbose=False,
             )
         )
 
@@ -373,9 +457,11 @@ class AccurateTranslator:
         return pieces
 
     def _hard_token_split(self, text: str) -> list[str]:
-        token_ids = self.tokenizer.encode(text, add_special_tokens=False)
+        token_ids = self.tokenizer.encode(
+            text, add_special_tokens=False, verbose=False
+        )
         prefix_tokens = self.tokenizer.encode(
-            self.settings.target_prefix, add_special_tokens=False
+            self.settings.target_prefix, add_special_tokens=False, verbose=False
         )
         size = max(1, self.settings.max_source_tokens - len(prefix_tokens))
         return [
@@ -385,11 +471,18 @@ class AccurateTranslator:
         ]
 
     def split_for_translation(self, text: str) -> list[str]:
-        """Split at sentence/clause boundaries, then enforce the model token limit."""
-        result: list[str] = []
-        for sentence in self._sentence_split(text):
+        """Keep paragraph context; split only when the model token limit requires it."""
+
+        stripped = text.strip()
+        if not stripped:
+            return []
+        if self._token_count(stripped) <= self.settings.max_source_tokens:
+            return [stripped]
+
+        sentence_parts: list[str] = []
+        for sentence in self._sentence_split(stripped):
             if self._token_count(sentence) <= self.settings.max_source_tokens:
-                result.append(sentence)
+                sentence_parts.append(sentence)
                 continue
             clauses = re.split(r"(?<=[，,、：:])", sentence)
             current = ""
@@ -397,17 +490,30 @@ class AccurateTranslator:
                 candidate = current + clause
                 if current and self._token_count(candidate) > self.settings.max_source_tokens:
                     if self._token_count(current) <= self.settings.max_source_tokens:
-                        result.append(current.strip())
+                        sentence_parts.append(current.strip())
                     else:
-                        result.extend(self._hard_token_split(current))
+                        sentence_parts.extend(self._hard_token_split(current))
                     current = clause
                 else:
                     current = candidate
             if current.strip():
                 if self._token_count(current) <= self.settings.max_source_tokens:
-                    result.append(current.strip())
+                    sentence_parts.append(current.strip())
                 else:
-                    result.extend(self._hard_token_split(current))
+                    sentence_parts.extend(self._hard_token_split(current))
+
+        separator = " " if self.direction == "en-zh" else ""
+        result: list[str] = []
+        current = ""
+        for part in sentence_parts:
+            candidate = part if not current else current + separator + part
+            if current and self._token_count(candidate) > self.settings.max_source_tokens:
+                result.append(current)
+                current = part
+            else:
+                current = candidate
+        if current:
+            result.append(current)
         return [piece for piece in result if piece]
 
     def _generate_batch(self, texts: Sequence[str]) -> list[str]:
@@ -423,6 +529,7 @@ class AccurateTranslator:
             "num_beams": self.settings.num_beams,
             "max_new_tokens": self.settings.max_new_tokens,
             "length_penalty": self.settings.length_penalty,
+            "repetition_penalty": self.settings.repetition_penalty,
             "early_stopping": True,
             "no_repeat_ngram_size": self.settings.no_repeat_ngram_size,
             "renormalize_logits": True,
@@ -488,7 +595,11 @@ class AccurateTranslator:
                 segments: list[str] = []
                 replacements: dict[str, str] = {}
             else:
-                protected_core, replacements = self._protect_glossary(core)
+                contextual_core, context_replacements = self._apply_context_rules(core)
+                protected_core, glossary_replacements = self._protect_glossary(
+                    contextual_core
+                )
+                replacements = {**glossary_replacements, **context_replacements}
                 segments = self.split_for_translation(protected_core)
                 all_segments.extend(segments)
             plans.append((leading, core, segments, trailing, replacements))
@@ -500,11 +611,44 @@ class AccurateTranslator:
                 results.append(leading + core + trailing)
                 continue
             translated_segments = [next(outputs) for _ in segments]
-            translated_core = self._restore_glossary(
-                " ".join(translated_segments), replacements
+            separator = " " if self.direction == "zh-en" else ""
+            translated_core = self._normalize_translation(
+                self._restore_glossary(
+                    separator.join(translated_segments), replacements
+                )
             )
             results.append(leading + translated_core + trailing)
         return results
+
+    def _normalize_translation(self, text: str) -> str:
+        normalized = text.strip()
+        if self.direction != "en-zh":
+            return normalized
+        # Marian sometimes leaves spaces between Chinese characters or around
+        # Chinese punctuation.  Removing only CJK-to-CJK spaces keeps Latin
+        # product names and numbers readable.
+        normalized = re.sub(
+            rf"(?<=[{CJK_PATTERN.pattern[1:-1]}])\s+(?=[{CJK_PATTERN.pattern[1:-1]}])",
+            "",
+            normalized,
+        )
+        normalized = re.sub(r"\s+([，。！？；：、])", r"\1", normalized)
+        normalized = re.sub(r"([，。！？；：、])\s+", r"\1", normalized)
+        normalized = re.sub(r"(?<!\d),(?!\d)", "，", normalized)
+        normalized = normalized.replace(";", "；")
+        normalized = re.sub(
+            r"一块(?=[^，。！？；]{0,16}(?:帷幕|面纱))",
+            "一层",
+            normalized,
+        )
+        # Collapse only three-or-more adjacent copies, avoiding legitimate
+        # two-character forms such as 人人 or 常常.
+        normalized = re.sub(
+            r"(?P<phrase>[\u3400-\u4dbf\u4e00-\u9fff]{2,6})(?:的?\s*(?P=phrase)){2,}",
+            r"\g<phrase>",
+            normalized,
+        )
+        return normalized
 
     def translate_text(self, text: str) -> str:
         lines = text.splitlines(keepends=True)

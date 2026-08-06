@@ -1,0 +1,106 @@
+[
+    {
+        "source": "Our biological lineage has left us flesh-bound creatures",
+        "rewrite": "Our evolutionary ancestry has made us creatures living in bodies of flesh",
+        "target": "我们的演化谱系使我们成为受血肉之躯束缚的生灵",
+        "aliases": ["我们的进化祖先使我们生活在肉体中", "我们的进化祖先使我们生活在肉体上", "我们的进化祖先将生物与肉体联系在一起", "我们的进化祖先给我们留下了肉质生物"]
+    },
+    {
+        "source": "their lineage was secured by a structure of stone and mortar",
+        "rewrite": "their ancestral bloodline was protected by a building made of stone and cement",
+        "target": "一座由砖石与灰浆构成的建筑守护着他们的血脉",
+        "aliases": ["他们祖先的血脉是用石块和水泥制成的建筑来保护的", "他们的血统是用石块和迫击炮结构固定的", "他们的家族被石块和迫击炮所占据"]
+    },
+    {
+        "source": "Rain hissed through its crowded, neon-drenched alleys",
+        "rewrite": "Rain hissed through its crowded alleys illuminated by neon lights",
+        "target": "雨丝嘶鸣着穿过霓虹浸染的拥挤小巷",
+        "aliases": ["雨在拥挤的巷子里流淌着,被荧光照亮", "雨在拥挤的巷子里流淌着,光线照亮了它", "雨在它拥挤的、破烂的小巷里流淌着", "雨在拥挤的烟雾中喷发,被荧光小巷点燃", "雨从它的拥挤的小巷里涌出,光线照亮了它"]
+    },
+    {
+        "source": "visceral, organic chaos",
+        "rewrite": "instinctive, organic chaos",
+        "target": "本能的、有机的混沌",
+        "aliases": ["本能的、有机的混乱", "内在的、有机的混乱", "内心深处的、有机的混乱", "内脏的、有机混乱"]
+    },
+    {
+        "source": "from which reason originally emerged",
+        "rewrite": "from which reason first arose",
+        "target": "理性最初正是从这种混沌中产生的",
+        "aliases": ["而这种混乱正是理性的起源", "而这种混乱首先产生理性", "由此产生了最初的原因", "从而产生最初的理性"]
+    },
+    {
+        "source": "biological lineage",
+        "rewrite": "evolutionary ancestry",
+        "target": "生物谱系",
+        "aliases": ["生物系", "生物线", "生物血统"]
+    },
+    {
+        "source": "flesh-bound creatures",
+        "rewrite": "creatures bound to bodies of flesh",
+        "target": "受血肉之躯束缚的生灵",
+        "aliases": ["肉质生物", "肉质的生物", "肉体约束的生物"]
+    },
+    {
+        "source": "heavy, suffocating shroud",
+        "rewrite": "heavy, suffocating dark veil",
+        "target": "沉重而令人窒息的帷幕",
+        "aliases": ["令人窒息的厚重黑面纱", "沉重的、令人窒息的裹尸布", "沉重的,令人窒息的裹尸布", "沉重的令人窒息的阴唇", "沉重的、令人窒息的阴唇"]
+    },
+    {
+        "source": "cold flagstones",
+        "rewrite": "cold stone-paved floor",
+        "target": "冰冷的石板地面",
+        "aliases": ["冰冷的旗石", "寒冷的石头地板板", "冰冷的石板地板", "寒冷的石板地板"]
+    },
+    {
+        "source": "flagstones",
+        "rewrite": "stone paving slabs",
+        "target": "石板",
+        "aliases": ["旗石", "旗帜石", "石头地板板"]
+    },
+    {
+        "source": "their lineage",
+        "rewrite": "their ancestral bloodline",
+        "target": "他们的血脉",
+        "aliases": ["他们的线条", "他们的线路"]
+    },
+    {
+        "source": "mortar",
+        "rewrite": "building cement",
+        "target": "灰浆",
+        "aliases": ["迫击炮弹", "迫击炮", "排击炮"],
+        "when_any": ["stone", "brick", "castle", "building", "structure", "wall", "masonry"],
+        "unless_any": ["shell", "round", "rocket", "fire", "weapon", "attack", "military"]
+    },
+    {
+        "source": "The Neon District",
+        "rewrite": "The District of Neon Lights",
+        "target": "霓虹区",
+        "aliases": ["尼恩区", "尼昂区", "尼安区", "尼恩光区", "霓红区"]
+    },
+    {
+        "source": "neon-drenched",
+        "rewrite": "lit by neon lights",
+        "target": "霓虹浸染的",
+        "aliases": ["被烧焦的", "烧焦的", "破烂的"]
+    },
+    {
+        "source": "physical bodies",
+        "rewrite": "bodies of flesh and blood",
+        "target": "肉身",
+        "aliases": ["物理体", "物理身体", "肉体和血肉", "肉身和血肉"]
+    },
+    {
+        "source": "buy himself a quiet bullet",
+        "rewrite": "be quietly killed by a bullet",
+        "target": "被一颗无声的子弹夺去性命",
+        "aliases": ["为自己买一颗安静的子弹", "给自己买一颗静悄悄的子弹", "买到一颗静悄悄的子弹", "买一颗安静的子弹", "被一颗子弹悄悄杀死"]
+    },
+    {
+        "source": "desolate moorland",
+        "rewrite": "desolate moorland",
+        "target": "荒凉的荒原",
+        "aliases": ["荒凉的荒凉荒凉之地", "荒凉的荒凉之地"]
+    }
+]

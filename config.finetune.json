@@ -8,15 +8,15 @@
     "datasets": [
         {
             "path": "./data/iwslt2017_zh_en_fast.parquet",
-            "weight": 0.7
+            "weight": 0.9
         },
         {
             "path": "./data/combined_general_en_zh.parquet",
-            "weight": 0.3
+            "weight": 0.05
         },
         {
             "path": "./data/opus_openoffice_en_zh.parquet",
-            "weight": 0.15
+            "weight": 0.05
         }
     ],
     "max_train_samples": 12000,
@@ -32,7 +32,7 @@
     "weight_decay": 0.01,
     "warmup_ratio": 0.06,
     "max_grad_norm": 1.0,
-    "checkpoint_steps": 750,
+    "checkpoint_steps": 375,
     "log_steps": 5,
     "seed": 42,
     "max_allowed_validation_loss_regression": 0.0
