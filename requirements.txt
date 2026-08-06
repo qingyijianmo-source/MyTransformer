@@ -1,0 +1,6 @@
+torch>=2.0
+tokenizers>=0.15
+datasets>=2.14
+numpy
+pandas
+pyarrow

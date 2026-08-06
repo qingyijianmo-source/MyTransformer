@@ -1,0 +1,59 @@
+{
+    "model":
+    {
+        "d_model": 256,
+        "d_hidden": 1024,
+        "num_heads": 8,
+        "drop_prob": 0.1,
+        "num_encode_layers": 4,
+        "num_decode_layers": 4,
+        "tie_target_embedding": true,
+        "source_seq_len": 256,
+        "target_seq_len": 256
+    },
+
+    "tokenizer":
+    {
+        "vocab_size": 12000,
+        "min_frequency": 2,
+        "tokenizers_dir": "./output/tokenizers_general"
+    },
+
+    "data":
+    {
+        "dataset_path": "./data/combined_general_en_zh.parquet",
+        "source_language": "zh_CN",
+        "target_language": "en_GB",
+        "train_size": 0.9,
+        "test_size": 0.1,
+        "seed": 42
+    },
+
+    "train":
+    {
+        "batch_size": 48,
+        "num_epochs": 3,
+        "warmup": 500,
+        "warmup_factor": 1.0,
+        "label_smoothing": 0.1,
+        "max_grad_norm": 1.0,
+        "num_workers": 0,
+        "dynamic_padding": true,
+        "gradient_accumulation_steps": 2,
+        "save_steps": 100,
+        "check_steps": 500,
+        "patience_times": 5,
+        "min_progress_value": 0.0005,
+        "checkpoints_dir": "./output/checkpoints_general_v2"
+    },
+
+    "run":
+    {
+        "zh_tokenizer_file_name": "zh_tokenizer.json",
+        "en_tokenizer_file_name": "en_tokenizer.json",
+        "selected_checkpoint": "best_state_from_checker.pt",
+        "max_new_tokens": 96,
+        "repetition_penalty": 1.15,
+        "no_repeat_ngram_size": 3
+    }
+}

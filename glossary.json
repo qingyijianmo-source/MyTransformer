@@ -1,0 +1,10 @@
+{
+    "混合精度": {
+        "target": "mixed-precision",
+        "aliases": ["mix accuracy", "mixed accuracy", "mix precision", "mixed precision"]
+    },
+    "断点续训": {
+        "target": "checkpoint resumption",
+        "aliases": ["the checkpoint resumption", "the checkpoint resolution", "checkpoint resolution", "breakpoint training", "continuing training", "continued training"]
+    }
+}

@@ -1,0 +1,6 @@
+torch>=2.6
+transformers==4.50.3
+sentencepiece>=0.2
+sacremoses>=0.1
+safetensors>=0.5
+python-docx>=1.1

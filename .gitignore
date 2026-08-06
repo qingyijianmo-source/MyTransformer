@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.vscode/
+
+.venv/
+venv/
+.env
+
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+output/
+
+# Generated large training corpora. Recreate them with the preparation scripts.
+data/*.parquet
+!data/opus_openoffice_en_zh.parquet

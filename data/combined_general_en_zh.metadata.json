@@ -1,0 +1,29 @@
+{
+  "created_at": "2026-08-04T14:37:46.906580+00:00",
+  "sources": [
+    {
+      "name": "OPUS OpenOffice en-zh",
+      "path": "D:\\新建文件夹\\CODE\\MyTransformer-main\\data\\opus_openoffice_en_zh.parquet",
+      "accepted_pairs": 44645,
+      "skipped_pairs": 24755
+    },
+    {
+      "name": "Helsinki-NLP/opus-100",
+      "config": "en-zh",
+      "split": "train",
+      "accepted_pairs": 100000,
+      "scanned_pairs": 108287,
+      "rejections": {
+        "duplicate": 2210,
+        "english_leakage": 1743,
+        "language": 1623,
+        "length": 1466,
+        "length_ratio": 1245
+      },
+      "dataset_card": "https://huggingface.co/datasets/Helsinki-NLP/opus-100",
+      "license_note": "Dataset card does not specify a unified corpus license."
+    }
+  ],
+  "total_pairs": 144645,
+  "seed": 42
+}

@@ -1,0 +1,19 @@
+{
+  "created_at": "2026-08-05T14:49:44.931081+00:00",
+  "source": "IWSLT/iwslt2017",
+  "config": "iwslt2017-zh-en",
+  "revision": "1063e8e4b8da33ceb9d2538293fcf587cc8c2fa7",
+  "license": "CC BY-NC-ND 4.0",
+  "dataset_card": "https://huggingface.co/datasets/IWSLT/iwslt2017",
+  "accepted_pairs": 100000,
+  "scanned_pairs": 101981,
+  "rejections": {
+    "duplicate": 630,
+    "english_leakage": 440,
+    "fast_length": 759,
+    "language": 32,
+    "length": 16,
+    "length_ratio": 104
+  },
+  "seed": 17
+}
