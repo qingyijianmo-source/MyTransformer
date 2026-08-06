@@ -157,7 +157,7 @@ SCST 候选只有在固定留出集奖励提高时才保存；若强化学习阶
 
 ```text
 手写实验：data → BPE → build.py → train_test.py/SCST → run.py
-实际翻译：OPUS-MT → 可选质量门控微调 → accurate_translator.py → GUI/文档
+实际翻译：双向 OPUS-MT → 两套独立质量门控权重 → accurate_translator.py → GUI/文档
 ```
 
 两套权重、配置和入口互不覆盖。训练这一页的模型不会自动提高 `translator_gui.py` 的翻译结果。

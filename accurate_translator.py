@@ -1,4 +1,4 @@
-"""Accurate Chinese-to-English translation for long text and documents.
+"""Accurate Chinese-English translation for long text and documents.
 
 The original hand-written Transformer remains available in ``run.py``.  This
 module uses a pretrained OPUS-MT checkpoint, sentence-aware chunking, batched
@@ -25,16 +25,46 @@ PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = PROJECT_DIR / "config.accurate.json"
 ProgressCallback = Callable[[int, int, str], None]
 CJK_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+LATIN_PATTERN = re.compile(r"[A-Za-z]")
 MARKDOWN_PREFIX = re.compile(r"^(\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s+))(.*)$")
 MARKDOWN_PROTECTED = re.compile(r"(`[^`]*`|https?://\S+|!?\[[^\]]*\]\([^)]*\))")
 
 
+def normalize_direction(direction: str) -> str:
+    aliases = {
+        "zh-en": "zh-en",
+        "zh_to_en": "zh-en",
+        "中译英": "zh-en",
+        "en-zh": "en-zh",
+        "en_to_zh": "en-zh",
+        "英译中": "en-zh",
+    }
+    normalized = aliases.get(str(direction).strip().lower())
+    if normalized is None:
+        raise ValueError(f"不支持的翻译方向：{direction}")
+    return normalized
+
+
+def detect_translation_direction(text: str) -> str:
+    """Choose a direction from visible script counts; manual selection wins in UI."""
+
+    cjk_count = len(CJK_PATTERN.findall(text))
+    latin_count = len(LATIN_PATTERN.findall(text))
+    if cjk_count == 0 and latin_count == 0:
+        return "zh-en"
+    # A Chinese sentence often contains Latin product names, while English
+    # prose rarely contains many Han characters.  Weight Han characters more.
+    return "zh-en" if cjk_count * 2 >= latin_count else "en-zh"
+
+
 @dataclass(frozen=True)
 class TranslatorSettings:
+    direction: str
     model_name: str
     revision: Optional[str]
     fine_tuned_model_dir: Optional[str]
     glossary_file: Optional[str]
+    target_prefix: str
     device: str
     batch_size: int
     num_beams: int
@@ -44,21 +74,29 @@ class TranslatorSettings:
     max_new_tokens: int
 
     @classmethod
-    def from_file(cls, path: Path) -> "TranslatorSettings":
+    def from_file(cls, path: Path, direction: str = "zh-en") -> "TranslatorSettings":
         with path.open("r", encoding="utf-8") as file:
             raw = json.load(file)
+        if direction not in {"zh-en", "en-zh"}:
+            raise ValueError(f"不支持的翻译方向：{direction}")
+        direction_values = raw.get("directions", {}).get(direction, {})
+        merged = {**raw, **direction_values}
+        if "model_name" not in merged:
+            raise ValueError(f"配置中缺少 {direction} 的 model_name")
         return cls(
-            model_name=str(raw["model_name"]),
-            revision=raw.get("revision") or None,
-            fine_tuned_model_dir=raw.get("fine_tuned_model_dir") or None,
-            glossary_file=raw.get("glossary_file") or None,
-            device=str(raw.get("device", "auto")),
-            batch_size=max(1, int(raw.get("batch_size", 16))),
-            num_beams=max(1, int(raw.get("num_beams", 5))),
-            length_penalty=float(raw.get("length_penalty", 1.0)),
-            no_repeat_ngram_size=max(0, int(raw.get("no_repeat_ngram_size", 3))),
-            max_source_tokens=max(32, int(raw.get("max_source_tokens", 384))),
-            max_new_tokens=max(32, int(raw.get("max_new_tokens", 512))),
+            direction=direction,
+            model_name=str(merged["model_name"]),
+            revision=merged.get("revision") or None,
+            fine_tuned_model_dir=merged.get("fine_tuned_model_dir") or None,
+            glossary_file=merged.get("glossary_file") or None,
+            target_prefix=str(merged.get("target_prefix", "")),
+            device=str(merged.get("device", "auto")),
+            batch_size=max(1, int(merged.get("batch_size", 16))),
+            num_beams=max(1, int(merged.get("num_beams", 5))),
+            length_penalty=float(merged.get("length_penalty", 1.0)),
+            no_repeat_ngram_size=max(0, int(merged.get("no_repeat_ngram_size", 3))),
+            max_source_tokens=max(32, int(merged.get("max_source_tokens", 384))),
+            max_new_tokens=max(32, int(merged.get("max_new_tokens", 512))),
         )
 
 
@@ -110,9 +148,11 @@ class AccurateTranslator:
         config_path: Path = DEFAULT_CONFIG,
         cache_path: Optional[Path] = None,
         progress: Optional[ProgressCallback] = None,
+        direction: str = "zh-en",
     ):
         self.config_path = config_path.resolve()
-        self.settings = TranslatorSettings.from_file(self.config_path)
+        self.direction = normalize_direction(direction)
+        self.settings = TranslatorSettings.from_file(self.config_path, self.direction)
         self.progress = progress
         self.glossary = self._load_glossary()
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -141,7 +181,8 @@ class AccurateTranslator:
             torch.backends.cuda.matmul.allow_tf32 = True
         signature_source = json.dumps(
             {
-                "pipeline_version": 4,
+                "pipeline_version": 7,
+                "direction": self.direction,
                 "model": model_source,
                 "model_fingerprint": model_fingerprint,
                 "revision": revision,
@@ -155,6 +196,22 @@ class AccurateTranslator:
         signature = hashlib.sha256(signature_source.encode("utf-8")).hexdigest()
         self.cache = TranslationCache(cache_path, signature)
         self._notify(1, 1, f"{model_label}已加载到 {self.device}")
+
+    @property
+    def direction_label(self) -> str:
+        return "中译英" if self.direction == "zh-en" else "英译中"
+
+    @property
+    def source_label(self) -> str:
+        return "中文" if self.direction == "zh-en" else "英文"
+
+    @property
+    def target_label(self) -> str:
+        return "英文" if self.direction == "zh-en" else "中文"
+
+    def should_translate(self, text: str) -> bool:
+        pattern = CJK_PATTERN if self.direction == "zh-en" else LATIN_PATTERN
+        return bool(pattern.search(text))
 
     def _resolve_model_source(self) -> tuple[str, Optional[str], str]:
         """Use a quality-gated local checkpoint when one has been promoted."""
@@ -227,10 +284,25 @@ class AccurateTranslator:
         # arrange fluent grammar; known alternative outputs are normalized
         # back to the approved term after generation.
         for source, rule in terms:
-            if source not in protected:
+            source_present = (
+                source in protected
+                if self.direction == "zh-en"
+                else re.search(
+                    rf"(?<!\w){re.escape(source)}(?!\w)",
+                    protected,
+                    flags=re.IGNORECASE,
+                )
+                is not None
+            )
+            if not source_present:
                 continue
             target = str(rule["target"])
-            protected = protected.replace(source, target)
+            # Marian zh→en can fluently arrange an approved English term that
+            # is injected into Chinese source text.  The reverse direction is
+            # less tolerant of Chinese embedded in English and may omit it, so
+            # en→zh keeps the source intact and normalizes known outputs only.
+            if self.direction == "zh-en":
+                protected = protected.replace(source, target)
             for alias in rule["aliases"]:
                 replacements[str(alias)] = target
         return protected, replacements
@@ -241,12 +313,15 @@ class AccurateTranslator:
         for alias, target in sorted(
             replacements.items(), key=lambda item: len(item[0]), reverse=True
         ):
-            restored = re.sub(
-                rf"(?<!\w){re.escape(alias)}(?!\w)",
-                target,
-                restored,
-                flags=re.IGNORECASE,
-            )
+            if CJK_PATTERN.search(alias):
+                restored = restored.replace(alias, target)
+            else:
+                restored = re.sub(
+                    rf"(?<!\w){re.escape(alias)}(?!\w)",
+                    target,
+                    restored,
+                    flags=re.IGNORECASE,
+                )
         return restored
 
     @staticmethod
@@ -264,13 +339,18 @@ class AccurateTranslator:
             self.progress(completed, max(total, 1), message)
 
     def _token_count(self, text: str) -> int:
-        return len(self.tokenizer.encode(text, add_special_tokens=False))
+        return len(
+            self.tokenizer.encode(
+                self.settings.target_prefix + text, add_special_tokens=False
+            )
+        )
 
-    @staticmethod
-    def _sentence_split(text: str) -> list[str]:
+    def _sentence_split(self, text: str) -> list[str]:
         if not text:
             return []
         endings = set("。！？!?；;\n")
+        if self.direction == "en-zh":
+            endings.add(".")
         closers = set("”’」』】）》)]\"")
         pieces: list[str] = []
         start = 0
@@ -294,7 +374,10 @@ class AccurateTranslator:
 
     def _hard_token_split(self, text: str) -> list[str]:
         token_ids = self.tokenizer.encode(text, add_special_tokens=False)
-        size = self.settings.max_source_tokens
+        prefix_tokens = self.tokenizer.encode(
+            self.settings.target_prefix, add_special_tokens=False
+        )
+        size = max(1, self.settings.max_source_tokens - len(prefix_tokens))
         return [
             self.tokenizer.decode(token_ids[index : index + size]).strip()
             for index in range(0, len(token_ids), size)
@@ -328,8 +411,9 @@ class AccurateTranslator:
         return [piece for piece in result if piece]
 
     def _generate_batch(self, texts: Sequence[str]) -> list[str]:
+        model_inputs = [self.settings.target_prefix + text for text in texts]
         encoded = self.tokenizer(
-            list(texts),
+            model_inputs,
             return_tensors="pt",
             padding=True,
             truncation=True,
@@ -400,7 +484,7 @@ class AccurateTranslator:
             trailing = trailing_match.group(0) if trailing_match else ""
             end = len(text) - len(trailing) if trailing else len(text)
             core = text[len(leading) : end]
-            if not CJK_PATTERN.search(core):
+            if not self.should_translate(core):
                 segments: list[str] = []
                 replacements: dict[str, str] = {}
             else:
@@ -436,8 +520,9 @@ class AccurateTranslator:
         return "".join(value + ending for value, ending in zip(translated, endings))
 
 
-def default_output_path(source: Path) -> Path:
-    return source.with_name(f"{source.stem}.en{source.suffix}")
+def default_output_path(source: Path, direction: str = "zh-en") -> Path:
+    language_suffix = ".en" if normalize_direction(direction) == "zh-en" else ".zh"
+    return source.with_name(f"{source.stem}{language_suffix}{source.suffix}")
 
 
 def default_cache_path(output: Path) -> Path:
@@ -503,6 +588,35 @@ def _replace_docx_paragraph_text(paragraph, translation: str) -> None:
         paragraph.add_run(translation)
 
 
+def document_text_sample(source: Path, max_characters: int = 50_000) -> str:
+    """Extract enough visible text to auto-detect a document's direction."""
+
+    suffix = source.suffix.lower()
+    if suffix == ".docx":
+        from docx import Document
+
+        document = Document(source)
+        values: list[str] = []
+        length = 0
+        for paragraph in _iter_docx_paragraphs(document):
+            text = _docx_paragraph_text(paragraph)
+            if not text:
+                continue
+            values.append(text)
+            length += len(text)
+            if length >= max_characters:
+                break
+        return "\n".join(values)[:max_characters]
+    if suffix in {".txt", ".md", ".markdown"}:
+        with source.open("r", encoding="utf-8-sig") as file:
+            return file.read(max_characters)
+    raise ValueError("目前支持 .txt、.md、.markdown 和 .docx")
+
+
+def detect_document_direction(source: Path) -> str:
+    return detect_translation_direction(document_text_sample(source))
+
+
 def translate_docx(
     translator: AccurateTranslator,
     source: Path,
@@ -518,7 +632,7 @@ def translate_docx(
         if paragraph._p.xpath(".//w:instrText"):
             continue
         text = _docx_paragraph_text(paragraph)
-        if CJK_PATTERN.search(text):
+        if translator.should_translate(text):
             targets.append(paragraph)
             source_texts.append(text)
     translated = translator.translate_many_texts(source_texts)
@@ -544,7 +658,7 @@ def translate_markdown(
             in_fence = not in_fence
             output_lines.append(line)
             continue
-        if in_fence or not CJK_PATTERN.search(body):
+        if in_fence or not translator.should_translate(body):
             output_lines.append(line)
             continue
         prefix_match = MARKDOWN_PREFIX.match(body)
@@ -557,12 +671,12 @@ def translate_markdown(
         candidates = [
             piece
             for index, piece in enumerate(pieces)
-            if index % 2 == 0 and CJK_PATTERN.search(piece)
+            if index % 2 == 0 and translator.should_translate(piece)
         ]
         translations = iter(translator.translate_many_texts(candidates))
         rebuilt = []
         for index, piece in enumerate(pieces):
-            if index % 2 == 0 and CJK_PATTERN.search(piece):
+            if index % 2 == 0 and translator.should_translate(piece):
                 rebuilt.append(next(translations))
             else:
                 rebuilt.append(piece)
@@ -577,11 +691,18 @@ def translate_document(
     overwrite: bool = False,
     progress: Optional[ProgressCallback] = None,
     translator: Optional[AccurateTranslator] = None,
+    direction: str = "auto",
 ) -> Path:
     source = source.resolve()
     if not source.is_file():
         raise FileNotFoundError(f"找不到输入文件：{source}")
-    output = (output or default_output_path(source)).resolve()
+    if translator is not None:
+        resolved_direction = translator.direction
+    elif direction == "auto":
+        resolved_direction = detect_document_direction(source)
+    else:
+        resolved_direction = normalize_direction(direction)
+    output = (output or default_output_path(source, resolved_direction)).resolve()
     if source == output:
         raise ValueError("输出文件不能覆盖输入文件")
     if output.exists() and not overwrite:
@@ -591,7 +712,9 @@ def translate_document(
         raise ValueError("目前支持 .txt、.md、.markdown 和 .docx")
     cache_path = default_cache_path(output)
     if translator is None:
-        translator = AccurateTranslator(config_path, cache_path, progress)
+        translator = AccurateTranslator(
+            config_path, cache_path, progress, direction=resolved_direction
+        )
     else:
         translator.progress = progress
         translator.cache = TranslationCache(cache_path, translator.cache.signature)
@@ -618,6 +741,12 @@ def _console_progress(completed: int, total: int, message: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument(
+        "--direction",
+        choices=("auto", "zh-en", "en-zh"),
+        default="auto",
+        help="翻译方向；auto 按输入文字识别",
+    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--text", help="翻译一段文字并退出")
     group.add_argument("--input", type=Path, help="输入 TXT、Markdown 或 DOCX")
@@ -635,19 +764,28 @@ def main() -> None:
             args.config,
             args.overwrite,
             _console_progress,
+            direction=args.direction,
         )
         print(output)
         return
-    translator = AccurateTranslator(args.config, progress=_console_progress)
     if args.text is not None:
+        direction = (
+            detect_translation_direction(args.text)
+            if args.direction == "auto"
+            else args.direction
+        )
+        translator = AccurateTranslator(
+            args.config, progress=_console_progress, direction=direction
+        )
         print(translator.translate_text(args.text))
         return
 
-    print("===== 高精度中译英：可粘贴多行文字 =====")
+    print("===== 高精度中英文互译：可粘贴多行文字 =====")
     print("单独输入 END 开始翻译；输入 quit 退出。")
+    translator: Optional[AccurateTranslator] = None
     while True:
         lines: list[str] = []
-        print("中文 >>>", flush=True)
+        print("原文 >>>", flush=True)
         while True:
             try:
                 line = input()
@@ -662,7 +800,21 @@ def main() -> None:
             lines.append(line)
         text = "\n".join(lines)
         if text.strip():
-            print("英文 >>>")
+            direction = (
+                detect_translation_direction(text)
+                if args.direction == "auto"
+                else args.direction
+            )
+            if translator is None or translator.direction != direction:
+                if translator is not None:
+                    translator.model.to("cpu")
+                    del translator
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                translator = AccurateTranslator(
+                    args.config, progress=_console_progress, direction=direction
+                )
+            print(f"{translator.target_label} >>>")
             print(translator.translate_text(text))
 
 

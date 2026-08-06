@@ -1,0 +1,34 @@
+{
+    "artificial intelligence": {
+        "target": "人工智能",
+        "aliases": ["人造智能"]
+    },
+    "machine translation": {
+        "target": "机器翻译",
+        "aliases": ["机械翻译"]
+    },
+    "mixed-precision": {
+        "target": "混合精度",
+        "aliases": ["混合准确度"]
+    },
+    "checkpoint resumption": {
+        "target": "断点续训",
+        "aliases": ["检查点恢复训练", "断点恢复训练"]
+    },
+    "data cleansing": {
+        "target": "数据清洗",
+        "aliases": ["数据清理"]
+    },
+    "model training": {
+        "target": "模型训练",
+        "aliases": ["模拟训练", "模式训练"]
+    },
+    "modelling training": {
+        "target": "模型训练",
+        "aliases": ["模拟培训", "建模培训"]
+    },
+    "breakpoint cache": {
+        "target": "断点缓存",
+        "aliases": ["断点高速缓存"]
+    }
+}

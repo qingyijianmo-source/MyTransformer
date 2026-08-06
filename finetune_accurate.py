@@ -50,6 +50,9 @@ class DatasetSource:
 class FineTuneSettings:
     base_model: str
     revision: str | None
+    source_language: str
+    target_language: str
+    target_prefix: str
     output_dir: Path
     datasets: tuple[DatasetSource, ...]
     max_train_samples: int
@@ -85,9 +88,16 @@ class FineTuneSettings:
         )
         if not datasets:
             raise ValueError("config.finetune.json 至少需要配置一份训练语料")
+        source_language = str(raw.get("source_language", "zh")).lower()
+        target_language = str(raw.get("target_language", "en")).lower()
+        if (source_language, target_language) not in {("zh", "en"), ("en", "zh")}:
+            raise ValueError("当前微调仅支持 zh→en 或 en→zh")
         return cls(
             base_model=str(raw["base_model"]),
             revision=raw.get("revision") or None,
+            source_language=source_language,
+            target_language=target_language,
+            target_prefix=str(raw.get("target_prefix", "")),
             output_dir=resolve(str(raw.get("output_dir", "./output/accurate_finetuned"))),
             datasets=datasets,
             max_train_samples=max(1, int(raw.get("max_train_samples", 12000))),
@@ -138,15 +148,23 @@ class PairDataset(Dataset):
 
 
 class TranslationCollator:
-    def __init__(self, tokenizer, max_source_tokens: int, max_target_tokens: int):
+    def __init__(
+        self,
+        tokenizer,
+        max_source_tokens: int,
+        max_target_tokens: int,
+        target_prefix: str = "",
+    ):
         self.tokenizer = tokenizer
         self.max_source_tokens = max_source_tokens
         self.max_target_tokens = max_target_tokens
+        self.target_prefix = target_prefix
 
     def __call__(self, pairs: Sequence[tuple[str, str]]) -> dict[str, torch.Tensor]:
         sources, targets = zip(*pairs)
+        model_sources = [self.target_prefix + source for source in sources]
         inputs = self.tokenizer(
-            list(sources),
+            model_sources,
             padding=True,
             truncation=True,
             max_length=self.max_source_tokens,
@@ -168,21 +186,31 @@ def normalize_text(value: object) -> str:
     return SPACE_PATTERN.sub(" ", str(value or "")).strip()
 
 
-def quality_reason(source: str, target: str) -> str | None:
+def quality_reason(source: str, target: str, source_language: str = "zh") -> str | None:
     if not source or not target:
         return "empty"
     if len(source) < 2 or len(target) < 2 or len(source) > 600 or len(target) > 900:
         return "length"
-    cjk_count = len(CJK_PATTERN.findall(source))
-    if cjk_count < 2:
-        return "source_language"
-    if not LATIN_PATTERN.search(target):
-        return "target_language"
-    if len(CJK_PATTERN.findall(target)) > max(2, len(target) // 10):
-        return "target_cjk"
+    source_cjk = len(CJK_PATTERN.findall(source))
+    target_cjk = len(CJK_PATTERN.findall(target))
+    if source_language == "zh":
+        if source_cjk < 2:
+            return "source_language"
+        if not LATIN_PATTERN.search(target):
+            return "target_language"
+        if target_cjk > max(2, len(target) // 10):
+            return "target_cjk"
+        ratio = len(target) / max(source_cjk, 1)
+    else:
+        if len(LATIN_PATTERN.findall(source)) < 2:
+            return "source_language"
+        if target_cjk < 2:
+            return "target_language"
+        if source_cjk > max(2, len(source) // 10):
+            return "source_cjk"
+        ratio = len(source) / max(target_cjk, 1)
     if source.casefold() == target.casefold():
         return "identical"
-    ratio = len(target) / max(cjk_count, 1)
     if ratio < 0.45 or ratio > 18.0:
         return "length_ratio"
     if source.startswith(("/", "http://", "https://")):
@@ -190,12 +218,15 @@ def quality_reason(source: str, target: str) -> str | None:
     return None
 
 
-def translation_pair(value: object) -> tuple[str, str] | None:
+def translation_pair(
+    value: object, source_language: str = "zh"
+) -> tuple[str, str] | None:
     if not isinstance(value, dict):
         return None
-    source = normalize_text(value.get("zh_CN") or value.get("zh") or value.get("zh-CN"))
-    target = normalize_text(value.get("en_GB") or value.get("en") or value.get("en-US"))
-    if quality_reason(source, target) is not None:
+    zh = normalize_text(value.get("zh_CN") or value.get("zh") or value.get("zh-CN"))
+    en = normalize_text(value.get("en_GB") or value.get("en") or value.get("en-US"))
+    source, target = (zh, en) if source_language == "zh" else (en, zh)
+    if quality_reason(source, target, source_language) is not None:
         return None
     return source, target
 
@@ -215,7 +246,7 @@ def select_pairs(
         seen_local: set[str] = set()
         rejected = 0
         for value in frame["translation"]:
-            pair = translation_pair(value)
+            pair = translation_pair(value, settings.source_language)
             if pair is None:
                 rejected += 1
                 continue
@@ -326,12 +357,22 @@ def evaluate_loss(
 
 
 @torch.inference_mode()
-def generate_samples(model, tokenizer, pairs: Sequence[tuple[str, str]], device: torch.device) -> list[dict[str, str]]:
+def generate_samples(
+    model,
+    tokenizer,
+    pairs: Sequence[tuple[str, str]],
+    device: torch.device,
+    target_prefix: str = "",
+    max_source_tokens: int = 192,
+) -> list[dict[str, str]]:
     model.eval()
     rows: list[dict[str, str]] = []
     for source, reference in pairs[:8]:
         encoded = tokenizer(
-            source, return_tensors="pt", truncation=True, max_length=192
+            target_prefix + source,
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_source_tokens,
         ).to(device)
         output = model.generate(**encoded, num_beams=4, max_new_tokens=192)
         rows.append(
@@ -413,7 +454,10 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         torch.backends.cuda.matmul.allow_tf32 = True
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-        logger.write("开始增强当前 OPUS-MT 中译英模型")
+        direction_label = (
+            "中译英" if settings.source_language == "zh" else "英译中"
+        )
+        logger.write(f"开始增强当前 OPUS-MT {direction_label}模型")
         logger.write(f"GPU：{torch.cuda.get_device_name(0)}")
         logger.write(
             f"有效批量：{settings.micro_batch_size * settings.gradient_accumulation_steps}；"
@@ -456,7 +500,10 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         parameter_count = sum(parameter.numel() for parameter in model.parameters())
         logger.write(f"模型参数：{parameter_count:,}")
         collator = TranslationCollator(
-            tokenizer, settings.max_source_tokens, settings.max_target_tokens
+            tokenizer,
+            settings.max_source_tokens,
+            settings.max_target_tokens,
+            settings.target_prefix,
         )
         generator = torch.Generator().manual_seed(settings.seed)
         train_loader = DataLoader(
@@ -487,7 +534,14 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             base_validation_loss = evaluate_loss(
                 model, validation_loader, device, use_amp, logger, "基线验证"
             )
-            base_samples = generate_samples(model, tokenizer, validation_pairs, device)
+            base_samples = generate_samples(
+                model,
+                tokenizer,
+                validation_pairs,
+                device,
+                settings.target_prefix,
+                settings.max_source_tokens,
+            )
             logger.write(f"官方基础模型验证损失：{base_validation_loss:.5f}")
 
         model.train()
@@ -580,7 +634,14 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         candidate_validation_loss = evaluate_loss(
             model, validation_loader, device, use_amp, logger, "增强后验证"
         )
-        candidate_samples = generate_samples(model, tokenizer, validation_pairs, device)
+        candidate_samples = generate_samples(
+            model,
+            tokenizer,
+            validation_pairs,
+            device,
+            settings.target_prefix,
+            settings.max_source_tokens,
+        )
         loss_change = candidate_validation_loss - base_validation_loss
         accepted = loss_change <= settings.max_allowed_validation_loss_regression
         status = "accepted" if accepted else "rejected"

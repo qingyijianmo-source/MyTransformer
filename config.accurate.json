@@ -1,8 +1,21 @@
 {
-    "model_name": "Helsinki-NLP/opus-mt-zh-en",
-    "revision": "cf109095479db38d6df799875e34039d4938aaa6",
-    "fine_tuned_model_dir": "./output/accurate_finetuned/best",
-    "glossary_file": "./glossary.json",
+    "default_direction": "auto",
+    "directions": {
+        "zh-en": {
+            "model_name": "Helsinki-NLP/opus-mt-zh-en",
+            "revision": "cf109095479db38d6df799875e34039d4938aaa6",
+            "fine_tuned_model_dir": "./output/accurate_finetuned/best",
+            "glossary_file": "./glossary.json",
+            "target_prefix": ""
+        },
+        "en-zh": {
+            "model_name": "Helsinki-NLP/opus-mt-en-zh",
+            "revision": "408d9bc410a388e1d9aef112a2daba955b945255",
+            "fine_tuned_model_dir": "./output/accurate_finetuned_en_zh/best",
+            "glossary_file": "./glossary.en_zh.json",
+            "target_prefix": ">>cmn_Hans<< "
+        }
+    },
     "device": "auto",
     "batch_size": 16,
     "num_beams": 5,

@@ -1,10 +1,10 @@
 {
-    "base_model": "Helsinki-NLP/opus-mt-zh-en",
-    "revision": "cf109095479db38d6df799875e34039d4938aaa6",
-    "source_language": "zh",
-    "target_language": "en",
-    "target_prefix": "",
-    "output_dir": "./output/accurate_finetuned",
+    "base_model": "Helsinki-NLP/opus-mt-en-zh",
+    "revision": "408d9bc410a388e1d9aef112a2daba955b945255",
+    "source_language": "en",
+    "target_language": "zh",
+    "target_prefix": ">>cmn_Hans<< ",
+    "output_dir": "./output/accurate_finetuned_en_zh",
     "datasets": [
         {
             "path": "./data/iwslt2017_zh_en_fast.parquet",
@@ -32,6 +32,6 @@
     "max_grad_norm": 1.0,
     "checkpoint_steps": 100,
     "log_steps": 5,
-    "seed": 42,
+    "seed": 43,
     "max_allowed_validation_loss_regression": 0.0
 }

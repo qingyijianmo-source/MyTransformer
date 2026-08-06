@@ -18,14 +18,24 @@ from accurate_translator import (
     PROJECT_DIR,
     AccurateTranslator,
     default_output_path,
+    detect_document_direction,
+    detect_translation_direction,
     translate_document,
 )
+
+
+DIRECTION_LABELS = {
+    "自动识别": "auto",
+    "中译英": "zh-en",
+    "英译中": "en-zh",
+}
+DIRECTION_NAMES = {value: key for key, value in DIRECTION_LABELS.items()}
 
 
 class TranslatorApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("MyTransformer 高精度长文本 / 文档翻译")
+        self.root.title("MyTransformer 高精度中英文互译 / 文档翻译")
         self.root.geometry("1280x820")
         self.root.minsize(920, 620)
         self.events: queue.Queue[tuple] = queue.Queue()
@@ -47,17 +57,33 @@ class TranslatorApp:
         title_row.pack(fill=tk.X)
         ttk.Label(
             title_row,
-            text="高精度中译英",
+            text="高精度中英文互译",
             style="Title.TLabel",
         ).pack(side=tk.LEFT)
         ttk.Label(
             title_row,
-            text="OPUS-MT · GPU · 可质量门控微调 · 长文档断点缓存 · glossary.json",
+            text="双向 OPUS-MT · GPU · 自动识别 · 文档缓存 · 双向术语表",
             style="Hint.TLabel",
         ).pack(side=tk.LEFT, padx=(14, 0), pady=(6, 0))
 
         toolbar = ttk.Frame(outer)
         toolbar.pack(fill=tk.X, pady=(12, 10))
+        ttk.Label(toolbar, text="方向：").pack(side=tk.LEFT)
+        self.direction_var = tk.StringVar(value="自动识别")
+        self.direction_box = ttk.Combobox(
+            toolbar,
+            textvariable=self.direction_var,
+            values=tuple(DIRECTION_LABELS),
+            width=9,
+            state="readonly",
+        )
+        self.direction_box.pack(side=tk.LEFT, padx=(0, 8))
+        self.direction_box.bind("<<ComboboxSelected>>", self._on_direction_changed)
+        self.direction_box.configure(state="disabled")
+        self.swap_button = ttk.Button(
+            toolbar, text="⇄ 交换", command=self._swap_languages, state=tk.DISABLED
+        )
+        self.swap_button.pack(side=tk.LEFT, padx=(0, 12))
         self.translate_button = ttk.Button(
             toolbar, text="翻译左侧文字", command=self._translate_text, state=tk.DISABLED
         )
@@ -75,7 +101,10 @@ class TranslatorApp:
             side=tk.LEFT, padx=(8, 0)
         )
         self.train_button = ttk.Button(
-            toolbar, text="训练增强模型…", command=self._launch_finetune
+            toolbar,
+            text="训练增强模型…",
+            command=self._launch_finetune,
+            state=tk.DISABLED,
         )
         self.train_button.pack(side=tk.LEFT, padx=(22, 0))
         self.reload_button = ttk.Button(
@@ -89,8 +118,10 @@ class TranslatorApp:
         right = ttk.Frame(pane)
         pane.add(left, weight=1)
         pane.add(right, weight=1)
-        ttk.Label(left, text="中文（可直接粘贴大段文字）").pack(anchor=tk.W, pady=(0, 5))
-        ttk.Label(right, text="英文译文").pack(anchor=tk.W, pady=(0, 5))
+        self.source_caption = tk.StringVar(value="原文（自动识别；可粘贴大段文字）")
+        self.target_caption = tk.StringVar(value="译文")
+        ttk.Label(left, textvariable=self.source_caption).pack(anchor=tk.W, pady=(0, 5))
+        ttk.Label(right, textvariable=self.target_caption).pack(anchor=tk.W, pady=(0, 5))
         self.input_text = tk.Text(
             left,
             wrap=tk.WORD,
@@ -103,7 +134,7 @@ class TranslatorApp:
             right,
             wrap=tk.WORD,
             undo=True,
-            font=("Segoe UI", 11),
+            font=("Microsoft YaHei UI", 11),
             padx=10,
             pady=10,
         )
@@ -123,7 +154,9 @@ class TranslatorApp:
 
     def _load_model(self) -> None:
         try:
-            translator = AccurateTranslator(DEFAULT_CONFIG, progress=self._emit_progress)
+            translator = AccurateTranslator(
+                DEFAULT_CONFIG, progress=self._emit_progress, direction="zh-en"
+            )
             self.events.put(("model_ready", translator))
         except Exception as error:  # surfaced in the foreground UI
             self.events.put(("error", f"模型加载失败：{error}"))
@@ -134,6 +167,9 @@ class TranslatorApp:
         self.translate_button.configure(state=state)
         self.document_button.configure(state=state)
         self.reload_button.configure(state=state)
+        self.swap_button.configure(state=state)
+        self.train_button.configure(state=tk.DISABLED if busy else tk.NORMAL)
+        self.direction_box.configure(state="disabled" if busy else "readonly")
 
     def _poll_events(self) -> None:
         try:
@@ -157,13 +193,16 @@ class TranslatorApp:
                         else "官方基础模型"
                     )
                     self.status.set(
-                        f"{model_kind}已就绪：{self.translator.device}；可粘贴文字或选择文档"
+                        f"{self.translator.direction_label} {model_kind}已就绪："
+                        f"{self.translator.device}；可自动识别或手动选择方向"
                     )
+                    self._update_captions(self.translator.direction)
                 elif kind == "text_done":
                     self.output_text.delete("1.0", tk.END)
                     self.output_text.insert("1.0", event[1])
                     self._set_busy(False)
-                    self.status.set("文字翻译完成")
+                    self._update_captions(event[2])
+                    self.status.set(f"{DIRECTION_NAMES[event[2]]}文字翻译完成")
                     self.progress["value"] = self.progress["maximum"]
                 elif kind == "document_done":
                     self._set_busy(False)
@@ -182,19 +221,20 @@ class TranslatorApp:
     def _translate_text(self) -> None:
         text = self.input_text.get("1.0", "end-1c")
         if not text.strip():
-            messagebox.showwarning("没有内容", "请先在左侧粘贴或输入中文。")
+            messagebox.showwarning("没有内容", "请先在左侧粘贴或输入中文/英文。")
             return
-        if self.translator is None:
-            return
+        direction = self._selected_direction(text=text)
+        self._update_captions(direction)
         self._set_busy(True)
-        self.status.set("正在切分并翻译文字…")
+        self.status.set(f"正在准备{DIRECTION_NAMES[direction]}并切分文字…")
         self.progress.configure(mode="indeterminate")
         self.progress.start(10)
 
         def worker() -> None:
             try:
-                result = self.translator.translate_text(text)
-                self.events.put(("text_done", result))
+                translator = self._ensure_translator(direction)
+                result = translator.translate_text(text)
+                self.events.put(("text_done", result, direction))
             except Exception as error:
                 self.events.put(("error", f"文字翻译失败：{error}"))
 
@@ -202,7 +242,7 @@ class TranslatorApp:
 
     def _translate_document(self) -> None:
         source_name = filedialog.askopenfilename(
-            title="选择中文文档",
+            title="选择中文或英文文档",
             filetypes=[
                 ("支持的文档", "*.docx *.txt *.md *.markdown"),
                 ("Word 文档", "*.docx"),
@@ -214,9 +254,15 @@ class TranslatorApp:
         if not source_name:
             return
         source = Path(source_name)
-        suggested = default_output_path(source)
+        try:
+            direction = self._selected_direction(source=source)
+        except Exception as error:
+            messagebox.showerror("无法识别文档", str(error))
+            return
+        self._update_captions(direction)
+        suggested = default_output_path(source, direction)
         output_name = filedialog.asksaveasfilename(
-            title="保存英文文档",
+            title=f"保存{('英文' if direction == 'zh-en' else '中文')}文档",
             initialdir=str(suggested.parent),
             initialfile=suggested.name,
             defaultextension=source.suffix,
@@ -232,13 +278,15 @@ class TranslatorApp:
 
         def worker() -> None:
             try:
+                translator = self._ensure_translator(direction)
                 result = translate_document(
                     source,
                     output,
                     DEFAULT_CONFIG,
                     overwrite=True,
                     progress=self._emit_progress,
-                    translator=self.translator,
+                    translator=translator,
+                    direction=direction,
                 )
                 self.events.put(("document_done", result))
             except Exception as error:
@@ -252,7 +300,7 @@ class TranslatorApp:
             messagebox.showwarning("没有译文", "右侧还没有可保存的译文。")
             return
         filename = filedialog.asksaveasfilename(
-            title="保存英文译文",
+            title="保存译文",
             defaultextension=".txt",
             filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
         )
@@ -268,13 +316,21 @@ class TranslatorApp:
             self.status.set("译文已复制到剪贴板")
 
     def _launch_finetune(self) -> None:
-        script = PROJECT_DIR / "start_accurate_finetune.cmd"
+        direction = self._selected_direction(
+            text=self.input_text.get("1.0", "end-1c")
+        )
+        script_name = (
+            "start_accurate_finetune.cmd"
+            if direction == "zh-en"
+            else "start_accurate_finetune_en_zh.cmd"
+        )
+        script = PROJECT_DIR / script_name
         if not script.is_file():
             messagebox.showerror("无法启动", f"训练入口不存在：\n{script}")
             return
         proceed = messagebox.askokcancel(
             "训练增强模型",
-            "将打开独立的前台训练窗口，实时显示损失、进度、显存和预计剩余时间。\n\n"
+            f"将训练{DIRECTION_NAMES[direction]}模型，并打开独立前台窗口，实时显示损失、进度、显存和预计剩余时间。\n\n"
             "训练期间请不要同时执行大文档翻译。质量门控通过后，回到此界面点击“重新加载模型”。",
         )
         if not proceed:
@@ -285,13 +341,16 @@ class TranslatorApp:
                 cwd=str(PROJECT_DIR),
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
             )
-            self.status.set("增强训练已在独立前台窗口启动")
+            self.status.set(f"{DIRECTION_NAMES[direction]}增强训练已在独立前台窗口启动")
         except OSError as error:
             messagebox.showerror("无法启动训练", str(error))
 
     def _reload_model(self) -> None:
         if self.busy:
             return
+        direction = self._selected_direction(
+            text=self.input_text.get("1.0", "end-1c")
+        )
         previous = self.translator
         self.translator = None
         self._set_busy(True)
@@ -302,18 +361,86 @@ class TranslatorApp:
 
         def worker(old_translator=previous) -> None:
             try:
-                if old_translator is not None:
-                    old_translator.model.to("cpu")
-                del old_translator
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                translator = AccurateTranslator(DEFAULT_CONFIG, progress=self._emit_progress)
+                self._release_translator(old_translator)
+                translator = AccurateTranslator(
+                    DEFAULT_CONFIG,
+                    progress=self._emit_progress,
+                    direction=direction,
+                )
                 self.events.put(("model_ready", translator))
             except Exception as error:
                 self.events.put(("error", f"重新加载模型失败：{error}"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _selected_direction(
+        self, text: str | None = None, source: Path | None = None
+    ) -> str:
+        selected = DIRECTION_LABELS[self.direction_var.get()]
+        if selected != "auto":
+            return selected
+        if source is not None:
+            return detect_document_direction(source)
+        if text and text.strip():
+            return detect_translation_direction(text)
+        if self.translator is not None:
+            return self.translator.direction
+        return "zh-en"
+
+    def _ensure_translator(self, direction: str) -> AccurateTranslator:
+        if self.translator is not None and self.translator.direction == direction:
+            return self.translator
+        previous = self.translator
+        self.translator = None
+        self._release_translator(previous)
+        translator = AccurateTranslator(
+            DEFAULT_CONFIG, progress=self._emit_progress, direction=direction
+        )
+        self.translator = translator
+        return translator
+
+    @staticmethod
+    def _release_translator(translator: AccurateTranslator | None) -> None:
+        if translator is not None:
+            translator.model.to("cpu")
+        del translator
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def _update_captions(self, direction: str) -> None:
+        if direction == "zh-en":
+            self.source_caption.set("中文原文（可直接粘贴大段文字）")
+            self.target_caption.set("英文译文")
+        else:
+            self.source_caption.set("英文原文（可直接粘贴大段文字）")
+            self.target_caption.set("中文译文")
+
+    def _on_direction_changed(self, _event=None) -> None:
+        direction = self._selected_direction(
+            text=self.input_text.get("1.0", "end-1c")
+        )
+        self._update_captions(direction)
+        selected = self.direction_var.get()
+        if selected == "自动识别":
+            self.status.set(f"自动识别当前内容为：{DIRECTION_NAMES[direction]}")
+        else:
+            self.status.set(f"已选择：{selected}；模型将在翻译时按需切换")
+
+    def _swap_languages(self) -> None:
+        if self.busy:
+            return
+        source = self.input_text.get("1.0", "end-1c")
+        target = self.output_text.get("1.0", "end-1c")
+        direction = self._selected_direction(text=source)
+        opposite = "en-zh" if direction == "zh-en" else "zh-en"
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.insert("1.0", target)
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.insert("1.0", source)
+        self.direction_var.set(DIRECTION_NAMES[opposite])
+        self._update_captions(opposite)
+        self.status.set(f"已交换文本，方向切换为{DIRECTION_NAMES[opposite]}")
 
     def _clear(self) -> None:
         if self.busy:
