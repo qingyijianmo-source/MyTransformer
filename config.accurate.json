@@ -1,6 +1,7 @@
 {
     "model_name": "Helsinki-NLP/opus-mt-zh-en",
     "revision": "cf109095479db38d6df799875e34039d4938aaa6",
+    "fine_tuned_model_dir": "./output/accurate_finetuned/best",
     "glossary_file": "./glossary.json",
     "device": "auto",
     "batch_size": 16,

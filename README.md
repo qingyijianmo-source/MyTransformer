@@ -39,8 +39,11 @@ MyTransformer/
 ├── run.py            # 交互式中译英推理(贪心解码)
 ├── accurate_translator.py # 高精度长文本/文档翻译核心
 ├── translator_gui.py # 大段文字与文档翻译图形界面
+├── finetune_accurate.py # 当前 OPUS-MT 的 GPU 微调 + 质量门控
+├── config.finetune.json # 快速增强训练配置
 ├── glossary.json     # 可编辑专业术语表
 ├── start_accurate_translator.cmd # 推荐启动入口
+├── start_accurate_finetune.cmd # 前台显示增强训练进度
 ├── smoke_test.py     # 小模型端到端快速验证
 ├── prepare_corpus.py # 下载、清洗并合并通用 OPUS-100 语料
 ├── prepare_iwslt_fast.py # 准备干净、紧凑的 IWSLT TED 语料

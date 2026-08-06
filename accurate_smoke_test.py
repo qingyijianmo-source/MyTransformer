@@ -12,16 +12,19 @@ def main() -> None:
     ]
     outputs = translator.translate_many_texts(sources)
     checks = [
-        ("work together", "address this issue"),
-        ("artificial intelligence", "our lives"),
-        ("weather", "park"),
+        (("work together",), ("address this issue", "solve this problem")),
+        (("artificial intelligence", "our lives"),),
+        (("weather", "park"),),
     ]
-    for source, output, required in zip(sources, outputs, checks):
+    for source, output, alternatives in zip(sources, outputs, checks):
         lowered = output.lower()
-        if not all(term in lowered for term in required):
+        if not any(all(term in lowered for term in required) for required in alternatives):
             raise AssertionError(f"unexpected translation: {source!r} -> {output!r}")
         print(f"ZH: {source}\nEN: {output}")
-    print(f"ACCURATE TRANSLATION TEST PASSED | device={translator.device}")
+    model_kind = "fine-tuned" if translator.using_fine_tuned_model else "base"
+    print(
+        f"ACCURATE TRANSLATION TEST PASSED | device={translator.device} | model={model_kind}"
+    )
 
 
 if __name__ == "__main__":

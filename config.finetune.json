@@ -1,0 +1,34 @@
+{
+    "base_model": "Helsinki-NLP/opus-mt-zh-en",
+    "revision": "cf109095479db38d6df799875e34039d4938aaa6",
+    "output_dir": "./output/accurate_finetuned",
+    "datasets": [
+        {
+            "path": "./data/iwslt2017_zh_en_fast.parquet",
+            "weight": 0.7
+        },
+        {
+            "path": "./data/combined_general_en_zh.parquet",
+            "weight": 0.3
+        },
+        {
+            "path": "./data/opus_openoffice_en_zh.parquet",
+            "weight": 0.15
+        }
+    ],
+    "max_train_samples": 12000,
+    "validation_samples": 256,
+    "max_source_tokens": 192,
+    "max_target_tokens": 192,
+    "micro_batch_size": 8,
+    "gradient_accumulation_steps": 4,
+    "max_steps": 200,
+    "learning_rate": 0.00001,
+    "weight_decay": 0.01,
+    "warmup_ratio": 0.06,
+    "max_grad_norm": 1.0,
+    "checkpoint_steps": 100,
+    "log_steps": 5,
+    "seed": 42,
+    "max_allowed_validation_loss_regression": 0.0
+}

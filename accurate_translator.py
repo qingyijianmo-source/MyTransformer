@@ -33,6 +33,7 @@ MARKDOWN_PROTECTED = re.compile(r"(`[^`]*`|https?://\S+|!?\[[^\]]*\]\([^)]*\))")
 class TranslatorSettings:
     model_name: str
     revision: Optional[str]
+    fine_tuned_model_dir: Optional[str]
     glossary_file: Optional[str]
     device: str
     batch_size: int
@@ -49,6 +50,7 @@ class TranslatorSettings:
         return cls(
             model_name=str(raw["model_name"]),
             revision=raw.get("revision") or None,
+            fine_tuned_model_dir=raw.get("fine_tuned_model_dir") or None,
             glossary_file=raw.get("glossary_file") or None,
             device=str(raw.get("device", "auto")),
             batch_size=max(1, int(raw.get("batch_size", 16))),
@@ -115,25 +117,34 @@ class AccurateTranslator:
         self.glossary = self._load_glossary()
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
         self.device = self._select_device(self.settings.device)
-        self._notify(0, 1, f"正在加载 {self.settings.model_name}…")
-        revision_args = (
+        model_source, revision, model_fingerprint = self._resolve_model_source()
+        self.active_model = model_source
+        self.using_fine_tuned_model = Path(model_source).is_absolute()
+        model_label = "本地增强模型" if self.using_fine_tuned_model else model_source
+        self._notify(0, 1, f"正在加载 {model_label}…")
+        revision_args = {"revision": revision} if revision else {}
+        # The fine-tuned model retains the base vocabulary.  Loading its
+        # tokenizer from the Hub cache also avoids SentencePiece's unreliable
+        # handling of non-ASCII local paths on Windows.
+        tokenizer_revision_args = (
             {"revision": self.settings.revision} if self.settings.revision else {}
         )
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.settings.model_name, **revision_args
+            self.settings.model_name, **tokenizer_revision_args
         )
         dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
-            self.settings.model_name, torch_dtype=dtype, **revision_args
+            model_source, torch_dtype=dtype, **revision_args
         ).to(self.device)
         self.model.eval()
         if self.device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True
         signature_source = json.dumps(
             {
-                "pipeline_version": 3,
-                "model": self.settings.model_name,
-                "revision": self.settings.revision,
+                "pipeline_version": 4,
+                "model": model_source,
+                "model_fingerprint": model_fingerprint,
+                "revision": revision,
                 "beams": self.settings.num_beams,
                 "length_penalty": self.settings.length_penalty,
                 "no_repeat_ngram_size": self.settings.no_repeat_ngram_size,
@@ -143,7 +154,38 @@ class AccurateTranslator:
         )
         signature = hashlib.sha256(signature_source.encode("utf-8")).hexdigest()
         self.cache = TranslationCache(cache_path, signature)
-        self._notify(1, 1, f"模型已加载到 {self.device}")
+        self._notify(1, 1, f"{model_label}已加载到 {self.device}")
+
+    def _resolve_model_source(self) -> tuple[str, Optional[str], str]:
+        """Use a quality-gated local checkpoint when one has been promoted."""
+
+        configured = self.settings.fine_tuned_model_dir
+        if configured:
+            candidate = Path(configured)
+            if not candidate.is_absolute():
+                candidate = (self.config_path.parent / candidate).resolve()
+            manifest_path = candidate / "training_manifest.json"
+            required = (
+                candidate / "config.json",
+                candidate / "model.safetensors",
+                candidate / "source.spm",
+                candidate / "target.spm",
+                candidate / "vocab.json",
+            )
+            if manifest_path.is_file() and all(path.is_file() for path in required):
+                try:
+                    manifest_text = manifest_path.read_text(encoding="utf-8")
+                    manifest = json.loads(manifest_text)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    manifest = {}
+                    manifest_text = ""
+                if manifest.get("status") == "accepted":
+                    fingerprint = hashlib.sha256(
+                        manifest_text.encode("utf-8")
+                    ).hexdigest()
+                    return str(candidate), None, fingerprint
+        fallback = f"{self.settings.model_name}@{self.settings.revision or 'default'}"
+        return self.settings.model_name, self.settings.revision, fallback
 
     def _load_glossary(self) -> dict[str, dict[str, object]]:
         configured = self.settings.glossary_file

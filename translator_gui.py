@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import ctypes
+import gc
 import queue
+import subprocess
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import torch
+
 from accurate_translator import (
     DEFAULT_CONFIG,
+    PROJECT_DIR,
     AccurateTranslator,
     default_output_path,
     translate_document,
@@ -47,7 +52,7 @@ class TranslatorApp:
         ).pack(side=tk.LEFT)
         ttk.Label(
             title_row,
-            text="OPUS-MT · GPU · Beam Search · 长文档断点缓存 · 可编辑 glossary.json",
+            text="OPUS-MT · GPU · 可质量门控微调 · 长文档断点缓存 · glossary.json",
             style="Hint.TLabel",
         ).pack(side=tk.LEFT, padx=(14, 0), pady=(6, 0))
 
@@ -69,6 +74,14 @@ class TranslatorApp:
         ttk.Button(toolbar, text="复制译文", command=self._copy_output).pack(
             side=tk.LEFT, padx=(8, 0)
         )
+        self.train_button = ttk.Button(
+            toolbar, text="训练增强模型…", command=self._launch_finetune
+        )
+        self.train_button.pack(side=tk.LEFT, padx=(22, 0))
+        self.reload_button = ttk.Button(
+            toolbar, text="重新加载模型", command=self._reload_model, state=tk.DISABLED
+        )
+        self.reload_button.pack(side=tk.LEFT, padx=(8, 0))
 
         pane = ttk.Panedwindow(outer, orient=tk.HORIZONTAL)
         pane.pack(fill=tk.BOTH, expand=True)
@@ -117,10 +130,10 @@ class TranslatorApp:
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
-        state = tk.DISABLED if busy else tk.NORMAL
-        if self.translator is not None:
-            self.translate_button.configure(state=state)
-            self.document_button.configure(state=state)
+        state = tk.DISABLED if busy or self.translator is None else tk.NORMAL
+        self.translate_button.configure(state=state)
+        self.document_button.configure(state=state)
+        self.reload_button.configure(state=state)
 
     def _poll_events(self) -> None:
         try:
@@ -138,7 +151,14 @@ class TranslatorApp:
                     self._set_busy(False)
                     self.progress.stop()
                     self.progress.configure(mode="determinate", maximum=1, value=1)
-                    self.status.set(f"模型已就绪：{self.translator.device}；可粘贴文字或选择文档")
+                    model_kind = (
+                        "本地增强模型"
+                        if self.translator.using_fine_tuned_model
+                        else "官方基础模型"
+                    )
+                    self.status.set(
+                        f"{model_kind}已就绪：{self.translator.device}；可粘贴文字或选择文档"
+                    )
                 elif kind == "text_done":
                     self.output_text.delete("1.0", tk.END)
                     self.output_text.insert("1.0", event[1])
@@ -246,6 +266,54 @@ class TranslatorApp:
             self.root.clipboard_clear()
             self.root.clipboard_append(text)
             self.status.set("译文已复制到剪贴板")
+
+    def _launch_finetune(self) -> None:
+        script = PROJECT_DIR / "start_accurate_finetune.cmd"
+        if not script.is_file():
+            messagebox.showerror("无法启动", f"训练入口不存在：\n{script}")
+            return
+        proceed = messagebox.askokcancel(
+            "训练增强模型",
+            "将打开独立的前台训练窗口，实时显示损失、进度、显存和预计剩余时间。\n\n"
+            "训练期间请不要同时执行大文档翻译。质量门控通过后，回到此界面点击“重新加载模型”。",
+        )
+        if not proceed:
+            return
+        try:
+            subprocess.Popen(
+                ["cmd.exe", "/c", str(script)],
+                cwd=str(PROJECT_DIR),
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+            self.status.set("增强训练已在独立前台窗口启动")
+        except OSError as error:
+            messagebox.showerror("无法启动训练", str(error))
+
+    def _reload_model(self) -> None:
+        if self.busy:
+            return
+        previous = self.translator
+        self.translator = None
+        self._set_busy(True)
+        self.reload_button.configure(state=tk.DISABLED)
+        self.status.set("正在释放旧模型并加载最新的质量门控权重…")
+        self.progress.configure(mode="indeterminate")
+        self.progress.start(10)
+
+        def worker(old_translator=previous) -> None:
+            try:
+                if old_translator is not None:
+                    old_translator.model.to("cpu")
+                del old_translator
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                translator = AccurateTranslator(DEFAULT_CONFIG, progress=self._emit_progress)
+                self.events.put(("model_ready", translator))
+            except Exception as error:
+                self.events.put(("error", f"重新加载模型失败：{error}"))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _clear(self) -> None:
         if self.busy:
