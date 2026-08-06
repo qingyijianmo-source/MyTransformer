@@ -61,7 +61,9 @@ class FineTuneSettings:
     max_target_tokens: int
     micro_batch_size: int
     gradient_accumulation_steps: int
+    num_epochs: int
     max_steps: int
+    continue_from_best: bool
     learning_rate: float
     weight_decay: float
     warmup_ratio: float
@@ -106,7 +108,9 @@ class FineTuneSettings:
             max_target_tokens=max(32, int(raw.get("max_target_tokens", 192))),
             micro_batch_size=max(1, int(raw.get("micro_batch_size", 8))),
             gradient_accumulation_steps=max(1, int(raw.get("gradient_accumulation_steps", 4))),
+            num_epochs=max(0, int(raw.get("num_epochs", 0))),
             max_steps=max(1, int(raw.get("max_steps", 200))),
+            continue_from_best=bool(raw.get("continue_from_best", True)),
             learning_rate=float(raw.get("learning_rate", 1e-5)),
             weight_decay=max(0.0, float(raw.get("weight_decay", 0.01))),
             warmup_ratio=min(1.0, max(0.0, float(raw.get("warmup_ratio", 0.06)))),
@@ -461,7 +465,8 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         logger.write(f"GPU：{torch.cuda.get_device_name(0)}")
         logger.write(
             f"有效批量：{settings.micro_batch_size * settings.gradient_accumulation_steps}；"
-            f"优化步骤：{settings.max_steps}；学习率：{settings.learning_rate:g}"
+            f"计划轮数：{settings.num_epochs if settings.num_epochs > 0 else '按步骤'}；"
+            f"学习率：{settings.learning_rate:g}"
         )
         training_pairs, validation_pairs, data_stats = select_pairs(settings, logger)
 
@@ -472,7 +477,7 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             safe_reset_directory(resume_dir, settings.output_dir)
         resume_state_path = resume_dir / "trainer_state.pt"
         resume_state: dict[str, object] | None = None
-        if resume_state_path.is_file() and (resume_dir / "config.json").is_file():
+        if not fresh and resume_state_path.is_file() and (resume_dir / "config.json").is_file():
             loaded = torch.load(resume_state_path, map_location="cpu", weights_only=True)
             if loaded.get("config_hash") == settings.config_hash:
                 resume_state = loaded
@@ -480,12 +485,30 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
                 revision_args: dict[str, str] = {}
                 logger.write(f"发现兼容断点，将从步骤 {loaded.get('step', 0)} 继续")
             else:
+                logger.write("已有断点与当前配置不兼容，将忽略该断点")
+        if resume_state is None:
+            accepted_best = False
+            best_manifest_path = best_dir / "training_manifest.json"
+            if (
+                not fresh
+                and settings.continue_from_best
+                and best_manifest_path.is_file()
+                and (best_dir / "config.json").is_file()
+                and (best_dir / "model.safetensors").is_file()
+            ):
+                try:
+                    best_manifest = json.loads(best_manifest_path.read_text(encoding="utf-8"))
+                    accepted_best = best_manifest.get("status") == "accepted"
+                except (OSError, json.JSONDecodeError):
+                    accepted_best = False
+            if accepted_best:
+                model_source = str(best_dir)
+                revision_args = {}
+                logger.write("从当前质量门控最佳权重继续增强")
+            else:
                 model_source = settings.base_model
                 revision_args = {"revision": settings.revision} if settings.revision else {}
-                logger.write("已有断点与当前配置不兼容，将从官方基础模型重新开始")
-        else:
-            model_source = settings.base_model
-            revision_args = {"revision": settings.revision} if settings.revision else {}
+                logger.write("从官方基础模型开始训练")
 
         # Fine-tuning never changes Marian's vocabulary.  Keep using the base
         # tokenizer cache so resume also works when the project path contains
@@ -523,6 +546,17 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             num_workers=0,
             pin_memory=True,
         )
+        steps_per_epoch = math.ceil(
+            len(train_loader) / settings.gradient_accumulation_steps
+        )
+        total_steps = (
+            steps_per_epoch * settings.num_epochs
+            if settings.num_epochs > 0
+            else settings.max_steps
+        )
+        logger.write(
+            f"每轮 {steps_per_epoch} 个优化步骤；总计 {total_steps} 步"
+        )
         use_amp = True
 
         if resume_state and "base_validation_loss" in resume_state:
@@ -530,7 +564,7 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             base_samples = list(resume_state.get("base_samples", []))
             logger.write(f"沿用断点中的基线验证损失：{base_validation_loss:.5f}")
         else:
-            logger.write("正在测量官方基础模型的验证损失…")
+            logger.write("正在测量本次起始模型的验证损失…")
             base_validation_loss = evaluate_loss(
                 model, validation_loader, device, use_amp, logger, "基线验证"
             )
@@ -542,7 +576,7 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
                 settings.target_prefix,
                 settings.max_source_tokens,
             )
-            logger.write(f"官方基础模型验证损失：{base_validation_loss:.5f}")
+            logger.write(f"起始模型验证损失：{base_validation_loss:.5f}")
 
         model.train()
         if hasattr(model, "gradient_checkpointing_enable"):
@@ -551,9 +585,9 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=settings.learning_rate, weight_decay=settings.weight_decay
         )
-        warmup_steps = round(settings.max_steps * settings.warmup_ratio)
+        warmup_steps = round(total_steps * settings.warmup_ratio)
         scheduler = get_linear_schedule_with_warmup(
-            optimizer, num_warmup_steps=warmup_steps, num_training_steps=settings.max_steps
+            optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
         )
         scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
         start_step = 0
@@ -569,8 +603,8 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         recent_loss = 0.0
         recent_micro_steps = 0
         training_started = time.monotonic()
-        logger.write(f"进入训练循环，从 {start_step}/{settings.max_steps} 开始")
-        for step in range(start_step + 1, settings.max_steps + 1):
+        logger.write(f"进入训练循环，从 {start_step}/{total_steps} 开始")
+        for step in range(start_step + 1, total_steps + 1):
             for _ in range(settings.gradient_accumulation_steps):
                 try:
                     batch = next(train_iterator)
@@ -593,22 +627,33 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
 
-            if step % settings.log_steps == 0 or step == settings.max_steps:
+            if step % settings.log_steps == 0 or step == total_steps:
                 elapsed = time.monotonic() - training_started
                 completed = step - start_step
                 seconds_per_step = elapsed / max(completed, 1)
-                eta_seconds = seconds_per_step * (settings.max_steps - step)
+                eta_seconds = seconds_per_step * (total_steps - step)
                 average_loss = recent_loss / max(recent_micro_steps, 1)
                 allocated_gb = torch.cuda.memory_allocated() / 1024**3
+                current_epoch = min(
+                    settings.num_epochs,
+                    (step - 1) // steps_per_epoch + 1,
+                ) if settings.num_epochs > 0 else 0
+                epoch_progress = (step - 1) % steps_per_epoch + 1
+                epoch_label = (
+                    f"轮次 {current_epoch}/{settings.num_epochs} "
+                    f"({epoch_progress}/{steps_per_epoch}) | "
+                    if settings.num_epochs > 0
+                    else ""
+                )
                 logger.write(
-                    f"进度 {step}/{settings.max_steps}（{step / settings.max_steps:.0%}） | "
+                    f"{epoch_label}进度 {step}/{total_steps}（{step / total_steps:.0%}） | "
                     f"loss {average_loss:.4f} | lr {scheduler.get_last_lr()[0]:.2e} | "
                     f"显存 {allocated_gb:.2f} GB | ETA {eta_seconds / 60:.1f} 分钟"
                 )
                 recent_loss = 0.0
                 recent_micro_steps = 0
 
-            if step % settings.checkpoint_steps == 0 and step < settings.max_steps:
+            if step % settings.checkpoint_steps == 0 and step < total_steps:
                 save_resume_checkpoint(
                     model,
                     tokenizer,
@@ -672,6 +717,8 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
                 for key, value in asdict(settings).items()
                 if key not in {"datasets", "output_dir", "config_hash"}
             },
+            "steps_per_epoch": steps_per_epoch,
+            "actual_total_steps": total_steps,
             "data": data_stats,
             "examples": [
                 {

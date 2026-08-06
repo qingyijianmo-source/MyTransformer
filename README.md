@@ -93,7 +93,13 @@ python prepare_iwslt_fast.py
 python prepare_corpus.py
 ```
 
-随后在翻译界面选择方向并点击“训练增强模型…”，或分别运行：
+随后可用一个前台监视窗口依次训练两个方向各 20 轮：
+
+```powershell
+.\start_bidirectional_finetune_20_epochs.cmd
+```
+
+也可以在翻译界面选择方向并点击“训练增强模型…”，或分别运行：
 
 ```powershell
 .\start_accurate_finetune.cmd
@@ -104,9 +110,9 @@ python prepare_corpus.py
 
 - 从本地语料选择 12,000 对清洗、去重后的训练句对；
 - 另外保留 256 对独立验证数据；
-- FP16、微批量 8、梯度累积 4、200 个优化步骤；
-- 每 100 步保存恢复断点；
-- 只有验证损失不高于官方基础模型时才启用新权重。
+- FP16、微批量 8、梯度累积 4，每个方向 20 轮（7,500 个优化步骤）；
+- 每 750 步保存恢复断点，日志实时显示轮次、loss、显存与 ETA；
+- 优先从当前已通过质量门控的最佳权重继续，只有验证损失不高于训练起点时才启用新权重。
 
 当前开发机的留出集验收结果：中译英 `1.60919 → 1.53671`，英译中 `2.39090 → 2.28609`。这些是本地质量门控结果，不代表通用公开基准。两个方向的增强权重分别保存在 `output/accurate_finetuned/best` 和 `output/accurate_finetuned_en_zh/best`，不会提交到 Git。
 
