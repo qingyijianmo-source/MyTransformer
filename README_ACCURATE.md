@@ -22,6 +22,8 @@ python translator_gui.py
 
 首次使用审校器先双击 `prepare_local_reviewer.cmd`。若模型未下载、依赖不可用、超时、OOM、输出为空或遗漏数字/缩写，程序会保留 OPUS 初译并继续后续段落。
 
+启动脚本会把 Hugging Face/Transformers 缓存固定在 D 盘纯英文目录 `D:\MyTransformer_HF_Cache`；模型清理或迁移时只需处理这个目录，不会再占用 C 盘。
+
 大段文字可直接粘贴到左侧；文档按钮支持 `.docx`、`.txt`、`.md` 和 `.markdown`。自动模式会先读取文档文字样本，再生成 `.en` 或 `.zh` 输出文件名。
 
 ## 命令行

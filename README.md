@@ -48,6 +48,8 @@ python -m pip install -r requirements-accurate.txt
 
 它会安装 4-bit 依赖并下载 `Qwen/Qwen3-4B-Instruct-2507` 到本机缓存。未准备审校器时仍可正常使用 OPUS-MT，疑难段落会自动回退初译。
 
+项目启动脚本已将 Hugging Face 模型/数据缓存固定到 D 盘纯英文目录 `D:\MyTransformer_HF_Cache`，不会再次占用 C 盘，也可避免 Windows SentencePiece 的中文路径问题；该目录不在 Git 仓库内，不会提交模型权重。
+
 需要训练原始手写模型时，再安装：
 
 ```powershell

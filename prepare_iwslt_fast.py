@@ -7,6 +7,10 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cache_config import configure_huggingface_cache
+
+configure_huggingface_cache()
+
 from datasets import Dataset
 from huggingface_hub import hf_hub_download
 import pandas as pd

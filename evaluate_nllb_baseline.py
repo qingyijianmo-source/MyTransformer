@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from translation_eval import evaluate_predictions, load_eval_cases, write_report
+from cache_config import configure_huggingface_cache
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -23,6 +24,7 @@ def main() -> int:
         "--output", type=Path, default=PROJECT_DIR / "eval" / "reports" / "nllb.json"
     )
     args = parser.parse_args()
+    configure_huggingface_cache()
 
     import torch
     from transformers import AutoModelForSeq2SeqLM, AutoTokenizer

@@ -27,7 +27,10 @@ from typing import Iterable, Sequence
 
 import pandas as pd
 import torch
+from cache_config import configure_huggingface_cache
 from torch.utils.data import DataLoader, Dataset
+configure_huggingface_cache()
+
 from transformers import (
     AutoModelForSeq2SeqLM,
     AutoTokenizer,

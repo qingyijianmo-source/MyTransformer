@@ -6,6 +6,8 @@ import argparse
 import importlib.metadata
 import sys
 
+from cache_config import configure_huggingface_cache
+
 
 DEFAULT_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
 
@@ -27,6 +29,8 @@ def main() -> int:
         "--check-only", action="store_true", help="只检查依赖和本地缓存"
     )
     args = parser.parse_args()
+    cache_dir = configure_huggingface_cache()
+    print(f"Hugging Face 缓存目录：{cache_dir}")
 
     try:
         import torch

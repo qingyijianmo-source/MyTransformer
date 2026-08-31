@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 import torch
+from cache_config import configure_huggingface_cache
+
+configure_huggingface_cache()
+
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from document_translation import (

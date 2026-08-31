@@ -7,6 +7,10 @@ from typing import Optional
 import torch
 import torch.amp as amp
 import torch.nn as nn
+from cache_config import configure_huggingface_cache
+
+configure_huggingface_cache()
+
 from datasets import Dataset as HFDataset
 from datasets import load_dataset
 from tokenizers import Tokenizer

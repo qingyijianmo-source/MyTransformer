@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+from cache_config import configure_huggingface_cache
+
+configure_huggingface_cache()
+
 from datasets import Dataset, load_dataset
 
 

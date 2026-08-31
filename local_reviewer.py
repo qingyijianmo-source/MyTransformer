@@ -8,6 +8,10 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Mapping, Protocol
 
+from cache_config import configure_huggingface_cache
+
+configure_huggingface_cache()
+
 
 @dataclass(frozen=True)
 class ReviewerSettings:
