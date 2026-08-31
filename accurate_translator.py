@@ -199,7 +199,7 @@ class AccurateTranslator:
         )
         dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_source, torch_dtype=dtype, **revision_args
+            model_source, dtype=dtype, **revision_args
         ).to(self.device)
         self.model.eval()
         if self.device.type == "cuda":

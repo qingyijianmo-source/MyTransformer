@@ -8,7 +8,6 @@ cd /d "%~dp0"
 set "HF_HOME=%~d0\MyTransformer_HF_Cache"
 set "HF_HUB_CACHE=%~d0\MyTransformer_HF_Cache\hub"
 set "HF_DATASETS_CACHE=%~d0\MyTransformer_HF_Cache\datasets"
-set "TRANSFORMERS_CACHE=%~d0\MyTransformer_HF_Cache\hub"
 
 set "PYTHON_EXE=%LocalAppData%\Programs\Python\Python314\python.exe"
 if exist "%PYTHON_EXE%" goto python_ready

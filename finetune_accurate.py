@@ -909,7 +909,7 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             gc.collect()
             torch.cuda.empty_cache()
             model = AutoModelForSeq2SeqLM.from_pretrained(
-                run_best_dir, torch_dtype=torch.float16
+                run_best_dir, dtype=torch.float16
             ).to(device)
             model.eval()
             model.config.use_cache = True

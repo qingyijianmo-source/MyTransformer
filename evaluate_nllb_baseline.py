@@ -44,7 +44,7 @@ def main() -> int:
     model = AutoModelForSeq2SeqLM.from_pretrained(
         MODEL_NAME,
         local_files_only=not args.allow_download,
-        torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
+        dtype=torch.float16 if device.type == "cuda" else torch.float32,
     ).to(device)
     predictions: list[str] = []
     for start in range(0, len(cases), 4):
