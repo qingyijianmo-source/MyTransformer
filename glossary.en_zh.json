@@ -42,5 +42,9 @@
     "Aurora Research Institute": {
         "target": "曙光研究所",
         "aliases": ["Aurora Research Institute", "Aurora研究所"]
+    },
+    "sparkling water": {
+        "target": "气泡水",
+        "aliases": ["苏打水", "汽水"]
     }
 }

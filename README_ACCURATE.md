@@ -82,7 +82,7 @@ python accurate_translator.py `
 
 `context_rules.en_zh.json` 用于处理必须结合语境判断的多义词和文学表达。规则以“词义候选 + 触发语境 + 禁用语境”为主，不再依赖完整测试句匹配。例如建筑语境中的 `mortar` 会改写为建筑灰浆，而带有 `shell`、`rocket`、`attack` 等军事语境时不会触发。
 
-这与全局术语替换不同：上下文规则不会把所有 `mortar` 都固定成“灰浆”。当前规则也覆盖 `shroud`、`flagstones`、`lineage`、`neon-drenched` 和硬汉派隐喻等已发现的高风险表达。
+这与全局术语替换不同：上下文规则不会把所有 `mortar` 都固定成“灰浆”。当前规则也覆盖 `shroud`、`flagstones`、`lineage`、`neon-drenched`、`call it a day`、`breathing down my neck` 和硬汉派隐喻等已发现的高风险表达；`server` 只有在餐厅语境（`restaurant/menu/table` 等）才译为“服务员”，数据库、网络和软件语境仍译为“服务器”。
 
 ## 分别增强两个方向
 
@@ -158,7 +158,7 @@ python evaluate_translations.py --direction both --split test --reviewer on `
   --baseline eval\baselines\opus_context_v1.json
 ```
 
-本机 RTX 4060 8GB 的当前测试报告：中译英 chrF++ `68.52 → 76.22`，英译中 `31.16 → 37.19`；两方向术语与数字/专名保留率均为 `100%`，严重错误为 `0`，chrF++ 配对 bootstrap 检验通过。报告是小型项目回归集结果，不应外推为通用基准。
+本机 RTX 4060 8GB 的当前测试报告：中译英 chrF++ `68.52 → 76.96`，英译中 `27.51 → 35.47`；两方向术语与数字/专名保留率均为 `100%`，严重错误为 `0`，chrF++ 配对 bootstrap 检验通过。报告是小型项目回归集结果，不应外推为通用基准。
 
 同时检查自动识别、中译英增强模型和英译中增强模型：
 

@@ -138,7 +138,7 @@ python evaluate_translations.py --direction both --split test --reviewer on `
   --baseline eval\baselines\opus_context_v1.json
 ```
 
-当前 RTX 4060 8GB 冻结测试结果：中译英 chrF++ `68.52 → 76.22`，英译中 `31.16 → 37.19`；两个方向的术语准确率、数字/专名保留率均为 `100%`，严重错译数为 `0`，配对 bootstrap 的 95% 区间下界均大于 0。测试集规模仍较小，这些数字用于项目回归，不等同于大型公开基准。
+当前 RTX 4060 8GB 冻结测试结果：中译英 chrF++ `68.52 → 76.96`，英译中 `27.51 → 35.47`；两个方向的术语准确率、数字/专名保留率均为 `100%`，严重错译数为 `0`，配对 bootstrap 的 95% 区间下界均大于 0。测试集规模仍较小，这些数字用于项目回归，不等同于大型公开基准。
 
 如需研究对照，可运行 `evaluate_nllb_baseline.py --direction en-zh --allow-download`。NLLB-600M 仅作为离线基线：其模型卡注明 CC BY-NC、研究用途且输入上限为 512 Token，不进入默认文档翻译管线。
 

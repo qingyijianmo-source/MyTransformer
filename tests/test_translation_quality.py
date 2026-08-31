@@ -6,6 +6,7 @@ from translation_quality import (
     validate_review_candidate,
     extract_acronyms,
 )
+from accurate_translator import _context_value_matches
 
 
 def test_immutable_tokens_round_trip() -> None:
@@ -55,3 +56,8 @@ def test_chinese_adjacent_acronym_is_detected_without_false_repetition() -> None
         "en-zh",
     )
     assert "repetition" not in assessment.reason_codes
+
+
+def test_context_triggers_use_word_boundaries() -> None:
+    assert _context_value_matches("medical organ failure", "organ")
+    assert not _context_value_matches("visceral organic chaos", "organ")

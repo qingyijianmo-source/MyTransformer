@@ -51,6 +51,21 @@ CJK_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 LATIN_PATTERN = re.compile(r"[A-Za-z]")
 
 
+def _context_value_matches(text: str, value: str) -> bool:
+    """Match a context trigger as a word, avoiding ``organ``→``organic`` hits."""
+
+    candidate = str(value).strip()
+    if not candidate:
+        return False
+    if re.search(r"[A-Za-z0-9]", candidate):
+        return re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(candidate)}(?![A-Za-z0-9_])",
+            text,
+            flags=re.IGNORECASE,
+        ) is not None
+    return candidate.casefold() in text.casefold()
+
+
 def normalize_direction(direction: str) -> str:
     aliases = {
         "zh-en": "zh-en",
@@ -381,7 +396,6 @@ class AccurateTranslator:
         """Disambiguate only when both the source term and its context match."""
 
         rewritten = text
-        original_folded = text.casefold()
         replacements: dict[str, str] = {}
         required_terms: list[str] = []
         forbidden_terms: list[str] = []
@@ -392,9 +406,11 @@ class AccurateTranslator:
                 continue
             when_any = list(rule["when_any"])
             unless_any = list(rule["unless_any"])
-            if when_any and not any(value in original_folded for value in when_any):
+            if when_any and not any(
+                _context_value_matches(text, value) for value in when_any
+            ):
                 continue
-            if any(value in original_folded for value in unless_any):
+            if any(_context_value_matches(text, value) for value in unless_any):
                 continue
             rewritten = pattern.sub(str(rule["rewrite"]), rewritten)
             target = str(rule["target"])
@@ -633,16 +649,17 @@ class AccurateTranslator:
         self.review_stats = ReviewStats()
         document_glossary = dict(self.glossary)
         document_text = "\n".join(texts)
-        document_folded = document_text.casefold()
         for rule in self.context_rules:
             source = str(rule["source"])
             when_any = list(rule["when_any"])
             unless_any = list(rule["unless_any"])
             if self._source_term_pattern(source).search(document_text) is None:
                 continue
-            if when_any and not any(value in document_folded for value in when_any):
+            if when_any and not any(
+                _context_value_matches(document_text, value) for value in when_any
+            ):
                 continue
-            if any(value in document_folded for value in unless_any):
+            if any(_context_value_matches(document_text, value) for value in unless_any):
                 continue
             document_glossary[source] = {
                 "target": str(rule["target"]),

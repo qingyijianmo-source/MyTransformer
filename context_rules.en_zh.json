@@ -52,6 +52,28 @@
         "aliases": ["线条", "线路", "家族线"]
     },
     {
+        "source": "call it a day",
+        "rewrite": "end work for today",
+        "target": "今天收工",
+        "aliases": ["叫它一天", "称之为一天", "把它叫作一天", "今天结束工作"],
+        "forbidden_output_any": ["叫它一天", "称之为一天"]
+    },
+    {
+        "source": "breathing down my neck",
+        "rewrite": "watching me closely",
+        "target": "催得我很紧",
+        "aliases": ["紧盯着我", "在我脖子上呼吸", "对着我的脖子呼吸", "呼吸在我的脖子上"],
+        "forbidden_output_any": ["脖子上呼吸", "脖子呼吸"]
+    },
+    {
+        "source": "server",
+        "rewrite": "restaurant server",
+        "target": "服务员",
+        "aliases": ["服务器", "伺服器", "餐厅服务器"],
+        "when_any": ["restaurant", "dining", "dinner", "lunch", "menu", "table", "waiter", "waitress", "tip"],
+        "unless_any": ["database", "network", "web", "cloud", "API", "software", "computer"]
+    },
+    {
         "source": "mortar shell",
         "rewrite": "mortar projectile",
         "target": "迫击炮弹",

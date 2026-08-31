@@ -8,7 +8,8 @@ class FakeBackend:
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         assert "<translation>" in system_prompt
-        assert "当前初译" in user_prompt
+        assert "<current_source>" in user_prompt
+        assert "<current_draft>" in user_prompt
         return self.output
 
     def release(self) -> None:

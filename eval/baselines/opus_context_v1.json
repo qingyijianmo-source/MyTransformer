@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-08-31T03:14:55.116341+00:00",
+  "created_at": "2026-08-31T11:02:00.245213+00:00",
   "dataset": "eval\\translation_eval.jsonl",
   "split": "test",
   "reviewer": "off",
@@ -122,9 +122,7 @@
           "forbidden_hits": [],
           "missing_preserve": [],
           "missing_numbers": [],
-          "quality_issues": [
-            "entity_consistency"
-          ],
+          "quality_issues": [],
           "critical": false
         },
         {
@@ -150,10 +148,10 @@
       ],
       "review": {
         "enabled": false,
-        "summary": "质量检测 6 段，触发审校 5 段，成功 0 段，回退 0 段",
+        "summary": "质量检测 6 段，触发审校 4 段，成功 0 段，回退 0 段",
         "stats": {
           "examined": 6,
-          "triggered": 5,
+          "triggered": 4,
           "reviewed": 0,
           "fallback": 0,
           "cache_hits": 0,
@@ -161,7 +159,6 @@
             "semantic_domain": 4,
             "length_ratio": 1,
             "technical_density": 1,
-            "entity_consistency": 1,
             "complex_syntax": 1
           },
           "fallback_reasons": {}
@@ -169,16 +166,19 @@
       }
     },
     "en-zh": {
-      "case_count": 7,
-      "chrf": 31.15853660879532,
+      "case_count": 10,
+      "chrf": 27.5058777420325,
       "simple_chrf": 64.00412414785296,
-      "required_accuracy": 0.65,
-      "term_accuracy": 0.6,
+      "required_accuracy": 0.6,
+      "term_accuracy": 0.625,
       "preserve_accuracy": 1.0,
       "number_accuracy": 1.0,
       "critical_errors": 1,
       "segment_chrf": [
         64.00412414785296,
+        16.91277152816784,
+        9.33506365300643,
+        30.701185977583496,
         22.86408391797263,
         17.330988162526626,
         28.703813287094448,
@@ -197,6 +197,65 @@
           "prediction": "请在18:00之前将修改后的合同发送给Alice Chen。",
           "chrf": 64.00412414785296,
           "missing_required_terms": [],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [],
+          "critical": false
+        },
+        {
+          "id": "test-en-zh-idiom-call-it-a-day",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "idiom",
+          "source": "We have finished the urgent fixes, so let's call it a day.",
+          "reference": "我们已经完成紧急修复，今天就收工吧。",
+          "prediction": "我们已经解决了紧急问题，让我们今天收工。",
+          "chrf": 16.91277152816784,
+          "missing_required_terms": [
+            "修复"
+          ],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [],
+          "critical": false
+        },
+        {
+          "id": "test-en-zh-idiom-breathing-neck",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "idiom",
+          "source": "The deadline is tomorrow, and my manager has been breathing down my neck all week.",
+          "reference": "截止日期就在明天，经理这周一直催得我很紧。",
+          "prediction": "最后期限是明天， 我的经理已经密切监视了我整整一周。",
+          "chrf": 9.33506365300643,
+          "missing_required_terms": [
+            "截止日期"
+          ],
+          "missing_terminology": [
+            "催得我很紧"
+          ],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [],
+          "critical": false
+        },
+        {
+          "id": "test-en-zh-polysemy-server",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "polysemy",
+          "source": "The restaurant server brought us the menu and asked whether we wanted sparkling water.",
+          "reference": "餐厅服务员给我们拿来了菜单，并问我们是否需要气泡水。",
+          "prediction": "餐厅的服务员给我们带来了菜单问我们是否想要闪亮的水。",
+          "chrf": 30.701185977583496,
+          "missing_required_terms": [
+            "气泡水"
+          ],
           "missing_terminology": [],
           "forbidden_hits": [],
           "missing_preserve": [],
@@ -303,7 +362,6 @@
           "missing_preserve": [],
           "missing_numbers": [],
           "quality_issues": [
-            "entity_consistency",
             "entity_consistency"
           ],
           "critical": false
@@ -333,17 +391,17 @@
       ],
       "review": {
         "enabled": false,
-        "summary": "质量检测 7 段，触发审校 6 段，成功 0 段，回退 0 段",
+        "summary": "质量检测 10 段，触发审校 9 段，成功 0 段，回退 0 段",
         "stats": {
-          "examined": 7,
-          "triggered": 6,
+          "examined": 10,
+          "triggered": 9,
           "reviewed": 0,
           "fallback": 0,
           "cache_hits": 0,
           "reasons": {
-            "ambiguous_term": 4,
+            "ambiguous_term": 7,
             "forbidden_literalism": 1,
-            "entity_consistency": 2,
+            "entity_consistency": 1,
             "long_paragraph": 1,
             "complex_syntax": 1
           },

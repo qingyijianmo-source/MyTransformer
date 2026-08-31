@@ -219,14 +219,17 @@ class LocalReviewer:
         )
         user = (
             f"审校触发原因：{', '.join(request.reasons) or '质量复核'}\n"
-            f"文档词汇与专名：\n{request.document_context}\n\n"
-            f"上一段原文：{request.previous_source or '无'}\n"
-            f"当前原文：{request.source}\n"
-            f"下一段原文：{request.next_source or '无'}\n\n"
-            f"当前初译：{request.draft}\n\n"
+            f"文档词汇与专名（只作参考）：\n<document_context>\n{request.document_context}\n</document_context>\n\n"
+            "上下文段落只用于判断代词和术语，严禁把上下文内容合并到当前译文；"
+            "最终只能翻译 <current_source> 内的文字。\n"
+            f"<previous_context>\n{request.previous_source or '无'}\n</previous_context>\n"
+            f"<current_source>\n{request.source}\n</current_source>\n"
+            f"<next_context>\n{request.next_source or '无'}\n</next_context>\n\n"
+            f"<current_draft>\n{request.draft}\n</current_draft>\n\n"
             f"必须采用的译法：{', '.join(request.required_terms) or '无'}\n"
             f"禁止出现的机械直译：{', '.join(request.forbidden_terms) or '无'}\n"
-            "请结合上下文消除歧义、重组长句并保持文体，不得遗漏任何事实。"
+            "请只返回当前原文对应的一段译文；不要翻译、复述或追加 previous_context/next_context，"
+            "不要新增句子，不得遗漏当前原文事实。结合上下文消除歧义、重组长句并保持文体。"
         )
         return system, user
 
