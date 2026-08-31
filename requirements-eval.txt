@@ -1,0 +1,5 @@
+pytest>=8
+sacrebleu>=2.5
+# Optional neural metric. It is intentionally not part of the normal runtime.
+unbabel-comet>=2.2
+

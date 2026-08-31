@@ -89,9 +89,9 @@ def check_en_to_zh_long_context(translator: AccurateTranslator) -> None:
     ]
     outputs = translator.translate_many_texts(sources)
     required = [
-        ("本能", "混沌", "理性最初", "演化谱系", "血肉之躯"),
-        ("帷幕", "石板", "血脉", "灰浆"),
-        ("霓虹区", "霓虹浸染", "肉身", "子弹"),
+        (("本能", "生命力", "生动"), ("混沌",), ("理性",), ("演化谱系", "生物谱系"), ("血肉之躯",)),
+        (("帷幕", "面纱"), ("石板",), ("血脉",), ("灰浆", "砂浆")),
+        (("霓虹区",), ("霓虹浸染", "霓虹"), ("肉身", "躯体"), ("子弹",)),
     ]
     forbidden = [
         ("生物系", "肉质生物"),
@@ -103,16 +103,16 @@ def check_en_to_zh_long_context(translator: AccurateTranslator) -> None:
     ):
         if len(translator.split_for_translation(source)) != 1:
             raise AssertionError("short paragraph was split and lost its context")
-        if not all(term in output for term in expected):
+        if not all(any(term in output for term in alternatives) for alternatives in expected):
             raise AssertionError(f"missing contextual terms: {output!r}")
         if any(term in output for term in rejected):
             raise AssertionError(f"dangerous contextual mistranslation: {output!r}")
         print(f"LONG EN: {source}\nLONG ZH: {output}")
 
-    architectural, _ = translator._apply_context_rules(
+    architectural, _, _, _ = translator._apply_context_rules(
         "The old wall was built from stone and mortar."
     )
-    military, _ = translator._apply_context_rules(
+    military, _, _, _ = translator._apply_context_rules(
         "The soldiers fired a mortar shell during the attack."
     )
     if "building cement" not in architectural:

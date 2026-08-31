@@ -1,4 +1,5 @@
 __pycache__/
+.pytest_cache/
 *.py[cod]
 .vscode/
 
@@ -12,6 +13,7 @@ checkpoints/
 *.ckpt
 
 output/
+eval/reports/
 
 # Generated large training corpora. Recreate them with the preparation scripts.
 data/*.parquet

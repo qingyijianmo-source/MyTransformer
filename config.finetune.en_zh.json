@@ -8,15 +8,18 @@
     "datasets": [
         {
             "path": "./data/iwslt2017_zh_en_fast.parquet",
-            "weight": 0.9
+            "weight": 0.7,
+            "domain": "spoken"
         },
         {
             "path": "./data/combined_general_en_zh.parquet",
-            "weight": 0.05
+            "weight": 0.2,
+            "domain": "general"
         },
         {
             "path": "./data/opus_openoffice_en_zh.parquet",
-            "weight": 0.05
+            "weight": 0.1,
+            "domain": "technical"
         }
     ],
     "max_train_samples": 12000,
@@ -35,5 +38,13 @@
     "checkpoint_steps": 375,
     "log_steps": 5,
     "seed": 43,
-    "max_allowed_validation_loss_regression": 0.0
+    "max_allowed_validation_loss_regression": 0.0,
+    "blacklist_file": "./data/training_blacklist.json",
+    "eval_dataset": "./eval/translation_eval.jsonl",
+    "eval_split": "dev",
+    "early_stopping_patience": 3,
+    "early_stopping_min_delta": 0.001,
+    "max_domain_fractions": {
+        "military": 0.03
+    }
 }

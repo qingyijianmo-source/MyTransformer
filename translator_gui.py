@@ -80,6 +80,14 @@ class TranslatorApp:
         self.direction_box.pack(side=tk.LEFT, padx=(0, 8))
         self.direction_box.bind("<<ComboboxSelected>>", self._on_direction_changed)
         self.direction_box.configure(state="disabled")
+        self.reviewer_var = tk.BooleanVar(value=True)
+        self.reviewer_checkbox = ttk.Checkbutton(
+            toolbar,
+            text="自动深度审校",
+            variable=self.reviewer_var,
+            command=self._on_reviewer_changed,
+        )
+        self.reviewer_checkbox.pack(side=tk.LEFT, padx=(0, 10))
         self.swap_button = ttk.Button(
             toolbar, text="⇄ 交换", command=self._swap_languages, state=tk.DISABLED
         )
@@ -155,7 +163,10 @@ class TranslatorApp:
     def _load_model(self) -> None:
         try:
             translator = AccurateTranslator(
-                DEFAULT_CONFIG, progress=self._emit_progress, direction="zh-en"
+                DEFAULT_CONFIG,
+                progress=self._emit_progress,
+                direction="zh-en",
+                reviewer_enabled=True,
             )
             self.events.put(("model_ready", translator))
         except Exception as error:  # surfaced in the foreground UI
@@ -170,6 +181,7 @@ class TranslatorApp:
         self.swap_button.configure(state=state)
         self.train_button.configure(state=tk.DISABLED if busy else tk.NORMAL)
         self.direction_box.configure(state="disabled" if busy else "readonly")
+        self.reviewer_checkbox.configure(state=tk.DISABLED if busy else tk.NORMAL)
 
     def _poll_events(self) -> None:
         try:
@@ -202,11 +214,13 @@ class TranslatorApp:
                     self.output_text.insert("1.0", event[1])
                     self._set_busy(False)
                     self._update_captions(event[2])
-                    self.status.set(f"{DIRECTION_NAMES[event[2]]}文字翻译完成")
+                    self.status.set(
+                        f"{DIRECTION_NAMES[event[2]]}文字翻译完成；{event[3]}"
+                    )
                     self.progress["value"] = self.progress["maximum"]
                 elif kind == "document_done":
                     self._set_busy(False)
-                    self.status.set(f"文档翻译完成：{event[1]}")
+                    self.status.set(f"文档翻译完成：{event[1]}；{event[2]}")
                     self.progress["value"] = self.progress["maximum"]
                     messagebox.showinfo("翻译完成", f"译文已保存到：\n{event[1]}")
                 elif kind == "error":
@@ -224,6 +238,7 @@ class TranslatorApp:
             messagebox.showwarning("没有内容", "请先在左侧粘贴或输入中文/英文。")
             return
         direction = self._selected_direction(text=text)
+        reviewer_enabled = self.reviewer_var.get()
         self._update_captions(direction)
         self._set_busy(True)
         self.status.set(f"正在准备{DIRECTION_NAMES[direction]}并切分文字…")
@@ -232,9 +247,12 @@ class TranslatorApp:
 
         def worker() -> None:
             try:
-                translator = self._ensure_translator(direction)
+                translator = self._ensure_translator(direction, reviewer_enabled)
+                translator.set_reviewer_enabled(reviewer_enabled)
                 result = translator.translate_text(text)
-                self.events.put(("text_done", result, direction))
+                self.events.put(
+                    ("text_done", result, direction, translator.review_summary)
+                )
             except Exception as error:
                 self.events.put(("error", f"文字翻译失败：{error}"))
 
@@ -271,6 +289,7 @@ class TranslatorApp:
         if not output_name:
             return
         output = Path(output_name)
+        reviewer_enabled = self.reviewer_var.get()
         self._set_busy(True)
         self.status.set("正在准备文档翻译…")
         self.progress.configure(mode="indeterminate")
@@ -278,7 +297,8 @@ class TranslatorApp:
 
         def worker() -> None:
             try:
-                translator = self._ensure_translator(direction)
+                translator = self._ensure_translator(direction, reviewer_enabled)
+                translator.set_reviewer_enabled(reviewer_enabled)
                 result = translate_document(
                     source,
                     output,
@@ -288,7 +308,9 @@ class TranslatorApp:
                     translator=translator,
                     direction=direction,
                 )
-                self.events.put(("document_done", result))
+                self.events.put(
+                    ("document_done", result, translator.review_summary)
+                )
             except Exception as error:
                 self.events.put(("error", f"文档翻译失败：{error}"))
 
@@ -366,6 +388,7 @@ class TranslatorApp:
                     DEFAULT_CONFIG,
                     progress=self._emit_progress,
                     direction=direction,
+                    reviewer_enabled=self.reviewer_var.get(),
                 )
                 self.events.put(("model_ready", translator))
             except Exception as error:
@@ -387,14 +410,19 @@ class TranslatorApp:
             return self.translator.direction
         return "zh-en"
 
-    def _ensure_translator(self, direction: str) -> AccurateTranslator:
+    def _ensure_translator(
+        self, direction: str, reviewer_enabled: bool
+    ) -> AccurateTranslator:
         if self.translator is not None and self.translator.direction == direction:
             return self.translator
         previous = self.translator
         self.translator = None
         self._release_translator(previous)
         translator = AccurateTranslator(
-            DEFAULT_CONFIG, progress=self._emit_progress, direction=direction
+            DEFAULT_CONFIG,
+            progress=self._emit_progress,
+            direction=direction,
+            reviewer_enabled=reviewer_enabled,
         )
         self.translator = translator
         return translator
@@ -402,11 +430,17 @@ class TranslatorApp:
     @staticmethod
     def _release_translator(translator: AccurateTranslator | None) -> None:
         if translator is not None:
-            translator.model.to("cpu")
+            translator.release()
         del translator
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    def _on_reviewer_changed(self) -> None:
+        if self.translator is not None:
+            self.translator.set_reviewer_enabled(self.reviewer_var.get())
+        state = "开启" if self.reviewer_var.get() else "关闭"
+        self.status.set(f"自动深度审校已{state}；简单段落仍使用快速翻译")
 
     def _update_captions(self, direction: str) -> None:
         if direction == "zh-en":

@@ -15,10 +15,29 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+from document_translation import (
+    atomic_write_text as _atomic_write_text,
+    default_cache_path,
+    default_output_path,
+    detect_document_direction,
+    translate_docx,
+    translate_markdown,
+)
+from local_reviewer import LocalReviewer, ReviewRequest, ReviewerSettings
+from translation_quality import (
+    ReviewStats,
+    assess_translation,
+    build_document_context,
+    detect_translation_direction,
+    protect_immutable_tokens,
+    restore_immutable_tokens,
+    validate_review_candidate,
+)
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -26,8 +45,6 @@ DEFAULT_CONFIG = PROJECT_DIR / "config.accurate.json"
 ProgressCallback = Callable[[int, int, str], None]
 CJK_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 LATIN_PATTERN = re.compile(r"[A-Za-z]")
-MARKDOWN_PREFIX = re.compile(r"^(\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s+))(.*)$")
-MARKDOWN_PROTECTED = re.compile(r"(`[^`]*`|https?://\S+|!?\[[^\]]*\]\([^)]*\))")
 
 
 def normalize_direction(direction: str) -> str:
@@ -43,18 +60,6 @@ def normalize_direction(direction: str) -> str:
     if normalized is None:
         raise ValueError(f"不支持的翻译方向：{direction}")
     return normalized
-
-
-def detect_translation_direction(text: str) -> str:
-    """Choose a direction from visible script counts; manual selection wins in UI."""
-
-    cjk_count = len(CJK_PATTERN.findall(text))
-    latin_count = len(LATIN_PATTERN.findall(text))
-    if cjk_count == 0 and latin_count == 0:
-        return "zh-en"
-    # A Chinese sentence often contains Latin product names, while English
-    # prose rarely contains many Han characters.  Weight Han characters more.
-    return "zh-en" if cjk_count * 2 >= latin_count else "en-zh"
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,7 @@ class TranslatorSettings:
     no_repeat_ngram_size: int
     max_source_tokens: int
     max_new_tokens: int
+    reviewer: ReviewerSettings
 
     @classmethod
     def from_file(cls, path: Path, direction: str = "zh-en") -> "TranslatorSettings":
@@ -101,6 +107,7 @@ class TranslatorSettings:
             no_repeat_ngram_size=max(0, int(merged.get("no_repeat_ngram_size", 3))),
             max_source_tokens=max(32, int(merged.get("max_source_tokens", 384))),
             max_new_tokens=max(32, int(merged.get("max_new_tokens", 512))),
+            reviewer=ReviewerSettings.from_mapping(merged.get("reviewer")),
         )
 
 
@@ -153,6 +160,7 @@ class AccurateTranslator:
         cache_path: Optional[Path] = None,
         progress: Optional[ProgressCallback] = None,
         direction: str = "zh-en",
+        reviewer_enabled: Optional[bool] = None,
     ):
         self.config_path = config_path.resolve()
         self.direction = normalize_direction(direction)
@@ -160,6 +168,14 @@ class AccurateTranslator:
         self.progress = progress
         self.glossary = self._load_glossary()
         self.context_rules = self._load_context_rules()
+        self.reviewer = LocalReviewer(self.settings.reviewer)
+        self.reviewer_enabled = (
+            self.settings.reviewer.enabled
+            if reviewer_enabled is None
+            else bool(reviewer_enabled)
+        )
+        self.reviewer.set_enabled(self.reviewer_enabled)
+        self.review_stats = ReviewStats()
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
         self.device = self._select_device(self.settings.device)
         model_source, revision, model_fingerprint = self._resolve_model_source()
@@ -186,7 +202,7 @@ class AccurateTranslator:
             torch.backends.cuda.matmul.allow_tf32 = True
         signature_source = json.dumps(
             {
-                "pipeline_version": 8,
+                "pipeline_version": 10,
                 "direction": self.direction,
                 "model": model_source,
                 "model_fingerprint": model_fingerprint,
@@ -197,6 +213,9 @@ class AccurateTranslator:
                 "no_repeat_ngram_size": self.settings.no_repeat_ngram_size,
                 "glossary": self.glossary,
                 "context_rules": self.context_rules,
+                "reviewer": self.settings.reviewer.signature(),
+                "reviewer_enabled": self.reviewer_enabled,
+                "document_context_version": 2,
             },
             sort_keys=True,
         )
@@ -219,6 +238,18 @@ class AccurateTranslator:
     def should_translate(self, text: str) -> bool:
         pattern = CJK_PATTERN if self.direction == "zh-en" else LATIN_PATTERN
         return bool(pattern.search(text))
+
+    @property
+    def review_summary(self) -> str:
+        return self.review_stats.summary()
+
+    def set_reviewer_enabled(self, enabled: bool) -> None:
+        self.reviewer_enabled = bool(enabled)
+        self.reviewer.set_enabled(self.reviewer_enabled)
+
+    def release(self) -> None:
+        self.reviewer.release()
+        self.model.to("cpu")
 
     def _resolve_model_source(self) -> tuple[str, Optional[str], str]:
         """Use a quality-gated local checkpoint when one has been promoted."""
@@ -327,6 +358,11 @@ class AccurateTranslator:
                         for value in raw_rule.get("unless_any", [])
                         if str(value)
                     ],
+                    "forbidden_output_any": [
+                        str(value)
+                        for value in raw_rule.get("forbidden_output_any", [])
+                        if str(value)
+                    ],
                 }
             )
         return rules
@@ -335,12 +371,16 @@ class AccurateTranslator:
     def _source_term_pattern(source: str) -> re.Pattern[str]:
         return re.compile(rf"(?<!\w){re.escape(source)}(?!\w)", flags=re.IGNORECASE)
 
-    def _apply_context_rules(self, text: str) -> tuple[str, dict[str, str]]:
+    def _apply_context_rules(
+        self, text: str
+    ) -> tuple[str, dict[str, str], tuple[str, ...], tuple[str, ...]]:
         """Disambiguate only when both the source term and its context match."""
 
         rewritten = text
         original_folded = text.casefold()
         replacements: dict[str, str] = {}
+        required_terms: list[str] = []
+        forbidden_terms: list[str] = []
         for rule in self.context_rules:
             source = str(rule["source"])
             pattern = self._source_term_pattern(source)
@@ -354,9 +394,16 @@ class AccurateTranslator:
                 continue
             rewritten = pattern.sub(str(rule["rewrite"]), rewritten)
             target = str(rule["target"])
+            required_terms.append(target)
+            forbidden_terms.extend(map(str, rule.get("forbidden_output_any", [])))
             for alias in rule["aliases"]:
                 replacements[str(alias)] = target
-        return rewritten, replacements
+        return (
+            rewritten,
+            replacements,
+            tuple(dict.fromkeys(required_terms)),
+            tuple(dict.fromkeys(forbidden_terms)),
+        )
 
     def _protect_glossary(self, text: str) -> tuple[str, dict[str, str]]:
         protected = text
@@ -579,11 +626,46 @@ class AccurateTranslator:
         return [translated[segment] for segment in segments]
 
     def translate_many_texts(self, texts: Sequence[str]) -> list[str]:
-        plans: list[tuple[str, str, list[str], str, dict[str, str]]] = []
+        self.review_stats = ReviewStats()
+        document_glossary = dict(self.glossary)
+        document_text = "\n".join(texts)
+        document_folded = document_text.casefold()
+        for rule in self.context_rules:
+            source = str(rule["source"])
+            when_any = list(rule["when_any"])
+            unless_any = list(rule["unless_any"])
+            if self._source_term_pattern(source).search(document_text) is None:
+                continue
+            if when_any and not any(value in document_folded for value in when_any):
+                continue
+            if any(value in document_folded for value in unless_any):
+                continue
+            document_glossary[source] = {
+                "target": str(rule["target"]),
+                "aliases": [],
+            }
+        document_context = build_document_context(
+            texts, document_glossary, self.direction
+        )
+        ambiguous_terms = tuple(
+            str(rule.get("source", "")) for rule in self.context_rules
+        )
+        plans: list[dict[str, object]] = []
         all_segments: list[str] = []
-        for text in texts:
+        for index, text in enumerate(texts):
             if not text or not text.strip():
-                plans.append(("", text, [], "", {}))
+                plans.append(
+                    {
+                        "leading": "",
+                        "core": text,
+                        "segments": [],
+                        "trailing": "",
+                        "replacements": {},
+                        "cached": None,
+                        "cache_key": "",
+                        "index": index,
+                    }
+                )
                 continue
             leading_match = re.match(r"^\s*", text)
             trailing_match = re.search(r"\s*$", text)
@@ -591,33 +673,151 @@ class AccurateTranslator:
             trailing = trailing_match.group(0) if trailing_match else ""
             end = len(text) - len(trailing) if trailing else len(text)
             core = text[len(leading) : end]
+            previous_source = texts[index - 1].strip() if index > 0 else ""
+            next_source = texts[index + 1].strip() if index + 1 < len(texts) else ""
+            final_cache_payload = {
+                "kind": "reviewed-paragraph",
+                "source": core,
+                "previous": previous_source[-600:],
+                "next": next_source[:600],
+                "document": document_context.fingerprint,
+                "reviewer_enabled": self.reviewer_enabled,
+            }
+            final_cache_key = json.dumps(
+                final_cache_payload, ensure_ascii=False, sort_keys=True
+            )
+            cached_final = self.cache.get(final_cache_key)
+            fact_replacements: dict[str, str] = {}
             if not self.should_translate(core):
                 segments: list[str] = []
                 replacements: dict[str, str] = {}
+            elif cached_final is not None:
+                segments = []
+                replacements = {}
+                self.review_stats.cache_hits += 1
             else:
-                contextual_core, context_replacements = self._apply_context_rules(core)
+                protected_facts, fact_replacements = protect_immutable_tokens(core)
+                (
+                    contextual_core,
+                    context_replacements,
+                    context_required_terms,
+                    forbidden_terms,
+                ) = self._apply_context_rules(protected_facts)
                 protected_core, glossary_replacements = self._protect_glossary(
                     contextual_core
                 )
                 replacements = {**glossary_replacements, **context_replacements}
+                required_terms = tuple(
+                    dict.fromkeys((*context_required_terms, *replacements.values()))
+                )
                 segments = self.split_for_translation(protected_core)
                 all_segments.extend(segments)
-            plans.append((leading, core, segments, trailing, replacements))
+            plans.append(
+                {
+                    "leading": leading,
+                    "core": core,
+                    "segments": segments,
+                    "trailing": trailing,
+                    "replacements": replacements,
+                    "fact_replacements": fact_replacements,
+                    "required_terms": required_terms if segments else (),
+                    "forbidden_terms": forbidden_terms if segments else (),
+                    "cached": cached_final,
+                    "cache_key": final_cache_key,
+                    "index": index,
+                }
+            )
 
         outputs = iter(self.translate_segments(all_segments))
         results: list[str] = []
-        for leading, core, segments, trailing, replacements in plans:
+        for plan in plans:
+            leading = str(plan["leading"])
+            core = str(plan["core"])
+            segments = list(plan["segments"])
+            trailing = str(plan["trailing"])
+            replacements = dict(plan["replacements"])
+            fact_replacements = dict(plan.get("fact_replacements", {}))
+            required_terms = tuple(plan.get("required_terms", ()))
+            forbidden_terms = tuple(plan.get("forbidden_terms", ()))
+            cached_final = plan["cached"]
+            index = int(plan["index"])
+            if cached_final is not None:
+                results.append(leading + str(cached_final) + trailing)
+                continue
             if not segments:
                 results.append(leading + core + trailing)
                 continue
             translated_segments = [next(outputs) for _ in segments]
             separator = " " if self.direction == "zh-en" else ""
-            translated_core = self._normalize_translation(
-                self._restore_glossary(
-                    separator.join(translated_segments), replacements
+            draft = self._normalize_translation(
+                restore_immutable_tokens(
+                    self._restore_glossary(
+                        separator.join(translated_segments), replacements
+                    ),
+                    fact_replacements,
                 )
             )
-            results.append(leading + translated_core + trailing)
+            assessment = assess_translation(
+                core,
+                draft,
+                self.direction,
+                ambiguous_terms,
+                self.settings.reviewer.trigger_threshold,
+                forbidden_terms,
+            )
+            self.review_stats.record_assessment(assessment)
+            final_translation = draft
+            if self.reviewer_enabled and assessment.should_review:
+                self._notify(
+                    self.review_stats.reviewed + self.review_stats.fallback,
+                    max(self.review_stats.triggered, 1),
+                    f"正在深度审校疑难段落 {index + 1}/{len(texts)}…",
+                )
+                review_result = self.reviewer.review(
+                    ReviewRequest(
+                        direction=self.direction,
+                        source=core,
+                        draft=draft,
+                        previous_source=(texts[index - 1].strip()[-600:] if index > 0 else ""),
+                        next_source=(texts[index + 1].strip()[:600] if index + 1 < len(texts) else ""),
+                        document_context=document_context.prompt_block(),
+                        reasons=assessment.reason_codes,
+                        required_terms=required_terms,
+                        forbidden_terms=forbidden_terms,
+                    )
+                )
+                if review_result.success:
+                    candidate = self._normalize_translation(
+                        restore_immutable_tokens(
+                            self._restore_glossary(
+                                review_result.translation, replacements
+                            ),
+                            fact_replacements,
+                        )
+                    )
+                    valid, _reason = validate_review_candidate(
+                        core,
+                        draft,
+                        candidate,
+                        self.direction,
+                        required_terms,
+                        forbidden_terms,
+                    )
+                    if valid:
+                        final_translation = candidate
+                        self.review_stats.reviewed += 1
+                    else:
+                        self.review_stats.record_fallback(_reason)
+                else:
+                    self.review_stats.record_fallback(review_result.message)
+            self.cache.put(str(plan["cache_key"]), final_translation)
+            results.append(leading + final_translation + trailing)
+        if self.review_stats.triggered:
+            self._notify(
+                self.review_stats.reviewed + self.review_stats.fallback,
+                self.review_stats.triggered,
+                self.review_stats.summary(),
+            )
         return results
 
     def _normalize_translation(self, text: str) -> str:
@@ -662,170 +862,6 @@ class AccurateTranslator:
             endings.append(line[len(body) :])
         translated = self.translate_many_texts(bodies)
         return "".join(value + ending for value, ending in zip(translated, endings))
-
-
-def default_output_path(source: Path, direction: str = "zh-en") -> Path:
-    language_suffix = ".en" if normalize_direction(direction) == "zh-en" else ".zh"
-    return source.with_name(f"{source.stem}{language_suffix}{source.suffix}")
-
-
-def default_cache_path(output: Path) -> Path:
-    return output.with_name(f"{output.name}.translation-cache.jsonl")
-
-
-def _atomic_write_text(output: Path, text: str) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_name(f".{output.name}.tmp")
-    temporary.write_text(text, encoding="utf-8")
-    os.replace(temporary, output)
-
-
-def _iter_table_paragraphs(table) -> Iterable:
-    for row in table.rows:
-        for cell in row.cells:
-            yield from cell.paragraphs
-            for nested in cell.tables:
-                yield from _iter_table_paragraphs(nested)
-
-
-def _iter_docx_paragraphs(document) -> Iterable:
-    # Keep the OOXML element objects themselves alive.  Storing only id(...)
-    # allows CPython to reuse an id after a temporary paragraph wrapper is
-    # collected, which can incorrectly suppress an unrelated later paragraph.
-    seen: set[object] = set()
-
-    def emit(paragraphs: Iterable):
-        for paragraph in paragraphs:
-            identity = paragraph._p
-            if identity not in seen:
-                seen.add(identity)
-                yield paragraph
-
-    yield from emit(document.paragraphs)
-    for table in document.tables:
-        yield from emit(_iter_table_paragraphs(table))
-    for section in document.sections:
-        for container in (
-            section.header,
-            section.first_page_header,
-            section.even_page_header,
-            section.footer,
-            section.first_page_footer,
-            section.even_page_footer,
-        ):
-            yield from emit(container.paragraphs)
-            for table in container.tables:
-                yield from emit(_iter_table_paragraphs(table))
-
-
-def _docx_paragraph_text(paragraph) -> str:
-    return "".join(node.text or "" for node in paragraph._p.xpath(".//w:t"))
-
-
-def _replace_docx_paragraph_text(paragraph, translation: str) -> None:
-    text_nodes = paragraph._p.xpath(".//w:t")
-    if text_nodes:
-        text_nodes[0].text = translation
-        for node in text_nodes[1:]:
-            node.text = ""
-    else:
-        paragraph.add_run(translation)
-
-
-def document_text_sample(source: Path, max_characters: int = 50_000) -> str:
-    """Extract enough visible text to auto-detect a document's direction."""
-
-    suffix = source.suffix.lower()
-    if suffix == ".docx":
-        from docx import Document
-
-        document = Document(source)
-        values: list[str] = []
-        length = 0
-        for paragraph in _iter_docx_paragraphs(document):
-            text = _docx_paragraph_text(paragraph)
-            if not text:
-                continue
-            values.append(text)
-            length += len(text)
-            if length >= max_characters:
-                break
-        return "\n".join(values)[:max_characters]
-    if suffix in {".txt", ".md", ".markdown"}:
-        with source.open("r", encoding="utf-8-sig") as file:
-            return file.read(max_characters)
-    raise ValueError("目前支持 .txt、.md、.markdown 和 .docx")
-
-
-def detect_document_direction(source: Path) -> str:
-    return detect_translation_direction(document_text_sample(source))
-
-
-def translate_docx(
-    translator: AccurateTranslator,
-    source: Path,
-    output: Path,
-) -> None:
-    from docx import Document
-
-    document = Document(source)
-    targets = []
-    source_texts = []
-    for paragraph in _iter_docx_paragraphs(document):
-        # Leave Word fields (TOC, page numbers, cross-references) intact.
-        if paragraph._p.xpath(".//w:instrText"):
-            continue
-        text = _docx_paragraph_text(paragraph)
-        if translator.should_translate(text):
-            targets.append(paragraph)
-            source_texts.append(text)
-    translated = translator.translate_many_texts(source_texts)
-    for paragraph, value in zip(targets, translated):
-        _replace_docx_paragraph_text(paragraph, value)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_name(f".{output.stem}.tmp{output.suffix}")
-    document.save(temporary)
-    os.replace(temporary, output)
-
-
-def translate_markdown(
-    translator: AccurateTranslator,
-    source_text: str,
-) -> str:
-    lines = source_text.splitlines(keepends=True)
-    output_lines: list[str] = []
-    in_fence = False
-    for line in lines:
-        body = line.rstrip("\r\n")
-        ending = line[len(body) :]
-        if body.lstrip().startswith("```"):
-            in_fence = not in_fence
-            output_lines.append(line)
-            continue
-        if in_fence or not translator.should_translate(body):
-            output_lines.append(line)
-            continue
-        prefix_match = MARKDOWN_PREFIX.match(body)
-        prefix, content = (
-            (prefix_match.group(1), prefix_match.group(2))
-            if prefix_match
-            else ("", body)
-        )
-        pieces = MARKDOWN_PROTECTED.split(content)
-        candidates = [
-            piece
-            for index, piece in enumerate(pieces)
-            if index % 2 == 0 and translator.should_translate(piece)
-        ]
-        translations = iter(translator.translate_many_texts(candidates))
-        rebuilt = []
-        for index, piece in enumerate(pieces):
-            if index % 2 == 0 and translator.should_translate(piece):
-                rebuilt.append(next(translations))
-            else:
-                rebuilt.append(piece)
-        output_lines.append(prefix + "".join(rebuilt) + ending)
-    return "".join(output_lines)
 
 
 def translate_document(

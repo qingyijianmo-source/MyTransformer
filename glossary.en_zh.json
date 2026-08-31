@@ -30,5 +30,17 @@
     "breakpoint cache": {
         "target": "断点缓存",
         "aliases": ["断点高速缓存"]
+    },
+    "Eleanor Reed": {
+        "target": "埃莉诺·里德",
+        "aliases": ["Eleanor Reed"]
+    },
+    "Reed": {
+        "target": "里德",
+        "aliases": ["Reed"]
+    },
+    "Aurora Research Institute": {
+        "target": "曙光研究所",
+        "aliases": ["Aurora Research Institute", "Aurora研究所"]
     }
 }

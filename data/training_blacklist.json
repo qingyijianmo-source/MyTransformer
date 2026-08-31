@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "description": "Pairs known to be semantically misaligned or harmful to lexical disambiguation.",
+  "exact_pairs": [
+    {
+      "source": "Oh, cruel fate to shroud my wife's dying words in mystery. - No sex!",
+      "target": "我是莫顿神父 我们相处得很愉快"
+    }
+  ],
+  "pair_hashes": [],
+  "source_patterns": []
+}

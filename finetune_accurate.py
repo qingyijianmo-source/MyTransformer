@@ -9,6 +9,7 @@ checkpoint when it does not regress.  Progress is printed live and mirrored to
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import gc
 import hashlib
 import json
@@ -33,6 +34,19 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
+from training_data_quality import (
+    TrainingBlacklist,
+    alignment_quality_reason,
+    classify_domain,
+    domain_allowed,
+)
+from translation_eval import (
+    compare_reports,
+    evaluate_predictions,
+    generate_seq2seq_predictions,
+    load_eval_cases,
+)
+
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = PROJECT_DIR / "config.finetune.json"
@@ -45,6 +59,7 @@ SPACE_PATTERN = re.compile(r"\s+")
 class DatasetSource:
     path: Path
     weight: float
+    domain: str = "general"
 
 
 @dataclass(frozen=True)
@@ -73,6 +88,12 @@ class FineTuneSettings:
     log_steps: int
     seed: int
     max_allowed_validation_loss_regression: float
+    blacklist_file: Path | None
+    eval_dataset: Path | None
+    eval_split: str
+    early_stopping_patience: int
+    early_stopping_min_delta: float
+    max_domain_fractions: dict[str, float]
     config_hash: str
 
     @classmethod
@@ -86,7 +107,11 @@ class FineTuneSettings:
             return candidate.resolve() if candidate.is_absolute() else (path.parent / candidate).resolve()
 
         datasets = tuple(
-            DatasetSource(resolve(str(item["path"])), max(0.0, float(item.get("weight", 1.0))))
+            DatasetSource(
+                resolve(str(item["path"])),
+                max(0.0, float(item.get("weight", 1.0))),
+                str(item.get("domain", "general")).strip().lower() or "general",
+            )
             for item in raw.get("datasets", [])
         )
         if not datasets:
@@ -122,6 +147,23 @@ class FineTuneSettings:
             max_allowed_validation_loss_regression=float(
                 raw.get("max_allowed_validation_loss_regression", 0.0)
             ),
+            blacklist_file=(
+                resolve(str(raw["blacklist_file"]))
+                if raw.get("blacklist_file")
+                else None
+            ),
+            eval_dataset=(
+                resolve(str(raw["eval_dataset"])) if raw.get("eval_dataset") else None
+            ),
+            eval_split=str(raw.get("eval_split", "dev")),
+            early_stopping_patience=max(0, int(raw.get("early_stopping_patience", 3))),
+            early_stopping_min_delta=max(
+                0.0, float(raw.get("early_stopping_min_delta", 0.001))
+            ),
+            max_domain_fractions={
+                str(key).lower(): min(1.0, max(0.0, float(value)))
+                for key, value in raw.get("max_domain_fractions", {}).items()
+            },
             config_hash=hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
         )
 
@@ -240,35 +282,45 @@ def select_pairs(
     settings: FineTuneSettings, logger: TeeLogger
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]], dict[str, object]]:
     rng = random.Random(settings.seed)
-    pools: list[tuple[DatasetSource, list[tuple[str, str]], int]] = []
+    blacklist = TrainingBlacklist.load(settings.blacklist_file)
+    pools: list[tuple[DatasetSource, list[tuple[tuple[str, str], str]]]] = []
     source_stats: list[dict[str, object]] = []
     for source in settings.datasets:
         if not source.path.is_file():
             logger.write(f"跳过不存在的语料：{source.path}")
             continue
         frame = pd.read_parquet(source.path, columns=["translation"])
-        accepted: list[tuple[str, str]] = []
+        accepted: list[tuple[tuple[str, str], str]] = []
         seen_local: set[str] = set()
-        rejected = 0
+        rejection_reasons: Counter[str] = Counter()
         for value in frame["translation"]:
             pair = translation_pair(value, settings.source_language)
             if pair is None:
-                rejected += 1
+                rejection_reasons["basic_quality"] += 1
+                continue
+            alignment_reason = alignment_quality_reason(
+                pair[0], pair[1], settings.source_language, blacklist
+            )
+            if alignment_reason:
+                rejection_reasons[alignment_reason] += 1
                 continue
             key = hashlib.sha1((pair[0] + "\0" + pair[1]).encode("utf-8")).hexdigest()
             if key in seen_local:
-                rejected += 1
+                rejection_reasons["duplicate"] += 1
                 continue
             seen_local.add(key)
-            accepted.append(pair)
+            detected_domain = classify_domain(pair[0], pair[1])
+            domain = detected_domain if detected_domain != "general" else source.domain
+            accepted.append((pair, domain))
         rng.shuffle(accepted)
-        pools.append((source, accepted, 0))
+        pools.append((source, accepted))
         source_stats.append(
             {
                 "path": str(source.path),
+                "configured_domain": source.domain,
                 "rows": len(frame),
                 "accepted_after_filter": len(accepted),
-                "rejected_or_duplicate": rejected,
+                "rejected": dict(sorted(rejection_reasons.items())),
             }
         )
         logger.write(
@@ -278,35 +330,43 @@ def select_pairs(
     if not pools:
         raise FileNotFoundError("没有找到可用于微调的 Parquet 语料")
     target_total = settings.max_train_samples + settings.validation_samples
-    total_weight = sum(source.weight for source, _, _ in pools) or float(len(pools))
+    total_weight = sum(source.weight for source, _ in pools) or float(len(pools))
     selected: list[tuple[str, str]] = []
     selected_keys: set[str] = set()
     positions: list[int] = [0 for _ in pools]
+    domain_counts: Counter[str] = Counter()
+    domain_cap_rejections: Counter[str] = Counter()
 
-    def append_unique(pair: tuple[str, str]) -> bool:
+    def append_unique(pair: tuple[str, str], domain: str) -> bool:
         key = hashlib.sha1((pair[0] + "\0" + pair[1]).encode("utf-8")).hexdigest()
         if key in selected_keys:
             return False
+        if not domain_allowed(
+            domain, domain_counts, target_total, settings.max_domain_fractions
+        ):
+            domain_cap_rejections[domain] += 1
+            return False
         selected_keys.add(key)
         selected.append(pair)
+        domain_counts[domain] += 1
         return True
 
-    for pool_index, (source, pool, _) in enumerate(pools):
+    for pool_index, (source, pool) in enumerate(pools):
         weight = source.weight if total_weight else 1.0
         quota = max(1, round(target_total * weight / total_weight))
         while positions[pool_index] < len(pool) and quota > 0:
-            pair = pool[positions[pool_index]]
+            pair, domain = pool[positions[pool_index]]
             positions[pool_index] += 1
-            if append_unique(pair):
+            if append_unique(pair, domain):
                 quota -= 1
 
     while len(selected) < target_total:
         progressed = False
-        for pool_index, (_, pool, _) in enumerate(pools):
+        for pool_index, (_, pool) in enumerate(pools):
             while positions[pool_index] < len(pool):
-                pair = pool[positions[pool_index]]
+                pair, domain = pool[positions[pool_index]]
                 positions[pool_index] += 1
-                if append_unique(pair):
+                if append_unique(pair, domain):
                     progressed = True
                     break
             if len(selected) >= target_total:
@@ -328,6 +388,9 @@ def select_pairs(
         "sources": source_stats,
         "training_pairs": len(training),
         "validation_pairs": len(validation),
+        "selected_domains": dict(sorted(domain_counts.items())),
+        "domain_cap_rejections": dict(sorted(domain_cap_rejections.items())),
+        "blacklist_file": str(settings.blacklist_file) if settings.blacklist_file else None,
     }
     return training, validation, stats
 
@@ -388,6 +451,42 @@ def generate_samples(
             }
         )
     return rows
+
+
+def evaluate_quality_suite(
+    model,
+    tokenizer,
+    settings: FineTuneSettings,
+    device: torch.device,
+    logger: TeeLogger,
+    label: str,
+) -> dict[str, object] | None:
+    if settings.eval_dataset is None:
+        return None
+    if not settings.eval_dataset.is_file():
+        raise FileNotFoundError(f"独立翻译评测集不存在：{settings.eval_dataset}")
+    direction = f"{settings.source_language}-{settings.target_language}"
+    cases = load_eval_cases(
+        settings.eval_dataset, direction=direction, split=settings.eval_split
+    )
+    logger.write(f"{label}：正在翻译 {len(cases)} 条独立 {direction} 评测样例…")
+    predictions = generate_seq2seq_predictions(
+        model,
+        tokenizer,
+        cases,
+        device,
+        target_prefix=settings.target_prefix,
+        max_source_tokens=settings.max_source_tokens,
+        batch_size=settings.micro_batch_size,
+    )
+    report = evaluate_predictions(cases, predictions)
+    logger.write(
+        f"{label}：chrF++ {float(report['chrf']):.2f}，"
+        f"术语 {float(report['term_accuracy']):.1%}，"
+        f"数字 {float(report['number_accuracy']):.1%}，"
+        f"严重错误 {int(report['critical_errors'])}"
+    )
+    return report
 
 
 def save_resume_checkpoint(
@@ -566,6 +665,7 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         if resume_state and "base_validation_loss" in resume_state:
             base_validation_loss = float(resume_state["base_validation_loss"])
             base_samples = list(resume_state.get("base_samples", []))
+            base_quality_report = resume_state.get("base_quality_report")
             logger.write(f"沿用断点中的基线验证损失：{base_validation_loss:.5f}")
         else:
             logger.write("正在测量本次起始模型的验证损失…")
@@ -581,6 +681,9 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
                 settings.max_source_tokens,
             )
             logger.write(f"起始模型验证损失：{base_validation_loss:.5f}")
+            base_quality_report = evaluate_quality_suite(
+                model, tokenizer, settings, device, logger, "基线质量"
+            )
 
         model.train()
         if hasattr(model, "gradient_checkpointing_enable"):
@@ -606,6 +709,7 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         best_epoch = 0
         best_epoch_step = 0
         epoch_history: list[dict[str, object]] = []
+        epochs_without_improvement = 0
         if resume_state:
             best_epoch_validation_loss = float(
                 resume_state.get("best_epoch_validation_loss", base_validation_loss)
@@ -613,20 +717,27 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             best_epoch = int(resume_state.get("best_epoch", 0))
             best_epoch_step = int(resume_state.get("best_epoch_step", 0))
             epoch_history = list(resume_state.get("epoch_history", []))
+            epochs_without_improvement = int(
+                resume_state.get("epochs_without_improvement", 0)
+            )
             if best_epoch_step and not (run_best_dir / "config.json").is_file():
                 logger.write("断点中的轮次最佳权重缺失，将重新跟踪最佳轮次")
                 best_epoch_validation_loss = base_validation_loss
                 best_epoch = 0
                 best_epoch_step = 0
                 epoch_history = []
+                epochs_without_improvement = 0
 
         optimizer.zero_grad(set_to_none=True)
         train_iterator = iter(train_loader)
         recent_loss = 0.0
         recent_micro_steps = 0
         training_started = time.monotonic()
+        completed_steps = start_step
+        stopped_early = False
         logger.write(f"进入训练循环，从 {start_step}/{total_steps} 开始")
         for step in range(start_step + 1, total_steps + 1):
+            completed_steps = step
             for _ in range(settings.gradient_accumulation_steps):
                 try:
                     batch = next(train_iterator)
@@ -697,6 +808,7 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
                         "validation_loss": epoch_validation_loss,
                     }
                 )
+                previous_best_loss = best_epoch_validation_loss
                 if epoch_validation_loss < best_epoch_validation_loss:
                     best_epoch_validation_loss = epoch_validation_loss
                     best_epoch = current_epoch
@@ -713,8 +825,50 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
                         f"当前最佳仍为第 {best_epoch} 轮 "
                         f"{best_epoch_validation_loss:.5f}"
                     )
+                if (
+                    epoch_validation_loss
+                    <= previous_best_loss - settings.early_stopping_min_delta
+                ):
+                    epochs_without_improvement = 0
+                else:
+                    epochs_without_improvement += 1
+                epoch_history[-1]["epochs_without_improvement"] = (
+                    epochs_without_improvement
+                )
                 model.train()
                 model.config.use_cache = False
+
+                if (
+                    settings.early_stopping_patience > 0
+                    and epochs_without_improvement >= settings.early_stopping_patience
+                ):
+                    stopped_early = True
+                    logger.write(
+                        f"连续 {epochs_without_improvement} 轮未达到 "
+                        f"{settings.early_stopping_min_delta:g} 的最小改善，提前停止。"
+                    )
+                    save_resume_checkpoint(
+                        model,
+                        tokenizer,
+                        resume_dir,
+                        {
+                            "step": step,
+                            "optimizer": optimizer.state_dict(),
+                            "scheduler": scheduler.state_dict(),
+                            "scaler": scaler.state_dict(),
+                            "config_hash": settings.config_hash,
+                            "base_validation_loss": base_validation_loss,
+                            "base_samples": base_samples,
+                            "base_quality_report": base_quality_report,
+                            "best_epoch_validation_loss": best_epoch_validation_loss,
+                            "best_epoch": best_epoch,
+                            "best_epoch_step": best_epoch_step,
+                            "epoch_history": epoch_history,
+                            "epochs_without_improvement": epochs_without_improvement,
+                        },
+                        logger,
+                    )
+                    break
 
             if step % settings.checkpoint_steps == 0 and step < total_steps:
                 save_resume_checkpoint(
@@ -729,10 +883,12 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
                         "config_hash": settings.config_hash,
                         "base_validation_loss": base_validation_loss,
                         "base_samples": base_samples,
+                        "base_quality_report": base_quality_report,
                         "best_epoch_validation_loss": best_epoch_validation_loss,
                         "best_epoch": best_epoch,
                         "best_epoch_step": best_epoch_step,
                         "epoch_history": epoch_history,
+                        "epochs_without_improvement": epochs_without_improvement,
                     },
                     logger,
                 )
@@ -742,8 +898,8 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
         if hasattr(model, "gradient_checkpointing_disable"):
             model.gradient_checkpointing_disable()
         model.config.use_cache = True
-        logger.write("全部训练轮次完成，正在选取验证集表现最佳的轮次…")
-        if best_epoch_step and best_epoch_step != total_steps:
+        logger.write("训练阶段结束，正在选取验证集表现最佳的轮次…")
+        if best_epoch_step and best_epoch_step != completed_steps:
             del optimizer, scheduler, scaler
             model.to("cpu")
             del model
@@ -770,18 +926,49 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             settings.target_prefix,
             settings.max_source_tokens,
         )
+        candidate_quality_report = evaluate_quality_suite(
+            model, tokenizer, settings, device, logger, "候选质量"
+        )
         loss_change = candidate_validation_loss - base_validation_loss
-        accepted = loss_change <= settings.max_allowed_validation_loss_regression
+        loss_gate_passed = (
+            loss_change <= settings.max_allowed_validation_loss_regression
+        )
+        quality_comparison = None
+        quality_gate_passed = True
+        if isinstance(base_quality_report, dict) and isinstance(
+            candidate_quality_report, dict
+        ):
+            quality_comparison = compare_reports(
+                candidate_quality_report,
+                base_quality_report,
+                require_absolute_targets=False,
+            )
+            quality_gate_passed = bool(quality_comparison["accepted"])
+        accepted = loss_gate_passed and quality_gate_passed
         status = "accepted" if accepted else "rejected"
         logger.write(
             f"验证结果：基础 {base_validation_loss:.5f}，增强后 {candidate_validation_loss:.5f}，"
             f"变化 {loss_change:+.5f}"
         )
+        if quality_comparison is not None:
+            logger.write(
+                "综合质量门："
+                + ("通过" if quality_gate_passed else "未通过")
+                + f"；检查项 {quality_comparison['checks']}"
+            )
 
         safe_reset_directory(candidate_dir, settings.output_dir)
         model.save_pretrained(candidate_dir, safe_serialization=True)
         tokenizer.save_pretrained(candidate_dir)
         tokenizer.save_vocabulary(candidate_dir)
+        training_settings: dict[str, object] = {}
+        for key, value in asdict(settings).items():
+            if key in {"datasets", "output_dir", "config_hash"}:
+                continue
+            if isinstance(value, Path):
+                training_settings[key] = str(value)
+            else:
+                training_settings[key] = value
         manifest = {
             "status": status,
             "started_at": started_at,
@@ -793,16 +980,22 @@ def train(settings: FineTuneSettings, fresh: bool = False) -> int:
             "candidate_validation_loss": candidate_validation_loss,
             "validation_loss_change": loss_change,
             "quality_gate": {
-                "max_allowed_validation_loss_regression": settings.max_allowed_validation_loss_regression
+                "max_allowed_validation_loss_regression": settings.max_allowed_validation_loss_regression,
+                "loss_gate_passed": loss_gate_passed,
+                "baseline": base_quality_report,
+                "candidate": candidate_quality_report,
+                "comparison": quality_comparison,
             },
-            "training": {
-                key: value
-                for key, value in asdict(settings).items()
-                if key not in {"datasets", "output_dir", "config_hash"}
-            },
+            "training": training_settings,
             "steps_per_epoch": steps_per_epoch,
-            "actual_total_steps": total_steps,
-            "selected_epoch": best_epoch if best_epoch_step else settings.num_epochs,
+            "planned_total_steps": total_steps,
+            "actual_total_steps": completed_steps,
+            "stopped_early": stopped_early,
+            "selected_epoch": (
+                best_epoch
+                if best_epoch_step
+                else int(epoch_history[-1]["epoch"])
+            ),
             "epoch_validation_history": epoch_history,
             "data": data_stats,
             "examples": [

@@ -1,0 +1,355 @@
+{
+  "created_at": "2026-08-31T03:14:55.116341+00:00",
+  "dataset": "eval\\translation_eval.jsonl",
+  "split": "test",
+  "reviewer": "off",
+  "directions": {
+    "zh-en": {
+      "case_count": 6,
+      "chrf": 68.51888406197264,
+      "simple_chrf": 100.0,
+      "required_accuracy": 0.7647058823529411,
+      "term_accuracy": 0.6,
+      "preserve_accuracy": 1.0,
+      "number_accuracy": 1.0,
+      "critical_errors": 0,
+      "segment_chrf": [
+        100.0,
+        59.657161312947835,
+        52.35497030594875,
+        43.55714636477682,
+        76.62392710443055,
+        78.92009928373187
+      ],
+      "rows": [
+        {
+          "id": "test-zh-en-general-01",
+          "split": "test",
+          "direction": "zh-en",
+          "category": "general",
+          "source": "请在18:00前把修订后的合同发给Alice Chen。",
+          "reference": "Please send the revised contract to Alice Chen before 18:00.",
+          "prediction": "Please send the revised contract to Alice Chen before 18:00.",
+          "chrf": 100.0,
+          "missing_required_terms": [],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [],
+          "critical": false
+        },
+        {
+          "id": "test-zh-en-philosophy-01",
+          "split": "test",
+          "direction": "zh-en",
+          "category": "philosophy",
+          "source": "理性并不是对本能混沌的否定，而是人类为了理解经验而逐渐形成的一种秩序。",
+          "reference": "Reason is not a rejection of instinctive chaos, but an order that humans gradually formed in order to understand experience.",
+          "prediction": "Reason is not a denial of inventive Chaos, but an order that humans have evolved to understand experience.",
+          "chrf": 59.657161312947835,
+          "missing_required_terms": [
+            "instinctive chaos"
+          ],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [
+            "semantic_domain"
+          ],
+          "critical": false
+        },
+        {
+          "id": "test-zh-en-literary-01",
+          "split": "test",
+          "direction": "zh-en",
+          "category": "literary",
+          "source": "城堡像一层沉重的帷幕笼罩着荒原，冰冷的石板路一直伸向没有灯火的大厅。",
+          "reference": "The castle hung over the moor like a heavy veil, while the cold flagstone path stretched toward a hall without lights.",
+          "prediction": "The castle is like a layer of heavy curtains covered with moor, and the cold flagstone path has been reaching out to a hall without light.",
+          "chrf": 52.35497030594875,
+          "missing_required_terms": [
+            "veil"
+          ],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [
+            "semantic_domain",
+            "length_ratio"
+          ],
+          "critical": false
+        },
+        {
+          "id": "test-zh-en-tech-01",
+          "split": "test",
+          "direction": "zh-en",
+          "category": "technical",
+          "source": "模型在RTX 4060上使用4-bit量化运行，峰值显存不得超过8 GB。",
+          "reference": "The model runs with 4-bit quantization on the RTX 4060, and peak VRAM must not exceed 8 GB.",
+          "prediction": "The model is quantified using 4-bit on RTX 4060, with peaks not exceeding 8 GB.",
+          "chrf": 43.55714636477682,
+          "missing_required_terms": [
+            "peak VRAM",
+            "quantization"
+          ],
+          "missing_terminology": [
+            "peak VRAM",
+            "quantization"
+          ],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [
+            "semantic_domain",
+            "technical_density"
+          ],
+          "critical": false
+        },
+        {
+          "id": "test-zh-en-consistency-01",
+          "split": "test",
+          "direction": "zh-en",
+          "category": "consistency",
+          "source": "曙光研究所成立于2024年。该研究所随后将内部系统命名为ARI。",
+          "reference": "The Aurora Research Institute was founded in 2024. The institute later named its internal system ARI.",
+          "prediction": "Aurora Research Institute was founded in 2024. The Institute subsequently named the internal system ARI.",
+          "chrf": 76.62392710443055,
+          "missing_required_terms": [],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [
+            "entity_consistency"
+          ],
+          "critical": false
+        },
+        {
+          "id": "test-zh-en-long-01",
+          "split": "test",
+          "direction": "zh-en",
+          "category": "long_syntax",
+          "source": "这份报告虽然收集了来自十个地区的数据，却没有解释样本为何集中在城市，也没有讨论这种偏差会如何影响最终结论。",
+          "reference": "Although the report collected data from ten regions, it did not explain why the sample was concentrated in cities or discuss how this bias might affect the final conclusion.",
+          "prediction": "Although the report collected data from 10 regions, it did not explain why the sample was concentrated in cities, nor did it discuss how such bias would influence the final conclusion.",
+          "chrf": 78.92009928373187,
+          "missing_required_terms": [],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [
+            "complex_syntax",
+            "semantic_domain"
+          ],
+          "critical": false
+        }
+      ],
+      "review": {
+        "enabled": false,
+        "summary": "质量检测 6 段，触发审校 5 段，成功 0 段，回退 0 段",
+        "stats": {
+          "examined": 6,
+          "triggered": 5,
+          "reviewed": 0,
+          "fallback": 0,
+          "cache_hits": 0,
+          "reasons": {
+            "semantic_domain": 4,
+            "length_ratio": 1,
+            "technical_density": 1,
+            "entity_consistency": 1,
+            "complex_syntax": 1
+          },
+          "fallback_reasons": {}
+        }
+      }
+    },
+    "en-zh": {
+      "case_count": 7,
+      "chrf": 31.15853660879532,
+      "simple_chrf": 64.00412414785296,
+      "required_accuracy": 0.65,
+      "term_accuracy": 0.6,
+      "preserve_accuracy": 1.0,
+      "number_accuracy": 1.0,
+      "critical_errors": 1,
+      "segment_chrf": [
+        64.00412414785296,
+        22.86408391797263,
+        17.330988162526626,
+        28.703813287094448,
+        18.937220410405413,
+        45.58355125750734,
+        20.685975078207814
+      ],
+      "rows": [
+        {
+          "id": "test-en-zh-general-01",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "general",
+          "source": "Please send the revised contract to Alice Chen before 18:00.",
+          "reference": "请在18:00前将修订后的合同发送给Alice Chen。",
+          "prediction": "请在18:00之前将修改后的合同发送给Alice Chen。",
+          "chrf": 64.00412414785296,
+          "missing_required_terms": [],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [],
+          "critical": false
+        },
+        {
+          "id": "test-en-zh-philosophy-01",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "philosophy",
+          "source": "Reason did not emerge by erasing instinctive chaos; it learned to give that chaos a form that thought could examine.",
+          "reference": "理性并非通过抹去本能的混沌而产生；它只是学会了赋予这种混沌一种可供思想审视的形式。",
+          "prediction": "理性并不是通过消除本能的混沌而出现的；它学会了给这种混乱一种可以思考的形式。",
+          "chrf": 22.86408391797263,
+          "missing_required_terms": [
+            "思想"
+          ],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [],
+          "critical": false
+        },
+        {
+          "id": "test-en-zh-literary-01",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "literary",
+          "source": "Generations crossed the cold flagstones, trusting stone and mortar to preserve a lineage already fading from memory.",
+          "reference": "一代又一代人走过冰冷的石板地面，相信砖石与灰浆能够守住那条已从记忆中淡去的血脉。",
+          "prediction": "一代人越过冰冷的石头地板， 信任的石头和灰浆来保护祖传的血脉已经从记忆中消失。",
+          "chrf": 17.330988162526626,
+          "missing_required_terms": [
+            "石板"
+          ],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [],
+          "critical": false
+        },
+        {
+          "id": "test-en-zh-cyberpunk-01",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "literary",
+          "source": "Beyond the Neon District, rain whispered across neon-drenched streets while corporations traded physical bodies as replaceable hardware.",
+          "reference": "霓虹区之外，雨声掠过霓虹浸染的街道，而企业则把肉身当作可以替换的硬件进行交易。",
+          "prediction": "在尼恩光线区之外， 雨声在亮光的街道上低语， 而公司则把肉身作为可替代的硬件进行交易。",
+          "chrf": 28.703813287094448,
+          "missing_required_terms": [
+            "霓虹",
+            "霓虹区"
+          ],
+          "missing_terminology": [
+            "霓虹区"
+          ],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [],
+          "critical": false
+        },
+        {
+          "id": "test-en-zh-idiom-01",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "idiom",
+          "source": "If he asked one question too many, someone would buy him a quiet bullet before sunrise.",
+          "reference": "如果他多问一句，就会有人在日出前送他一颗无声的子弹。",
+          "prediction": "如果他问太多一个问题， 有人会在日出前给他买一颗静默的刺杀子弹。",
+          "chrf": 18.937220410405413,
+          "missing_required_terms": [],
+          "missing_terminology": [
+            "无声的子弹"
+          ],
+          "forbidden_hits": [
+            "买"
+          ],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [],
+          "critical": true
+        },
+        {
+          "id": "test-en-zh-consistency-01",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "consistency",
+          "source": "Dr. Eleanor Reed joined the Aurora Research Institute in 2024. Reed later became the director of ARI.",
+          "reference": "埃莉诺·里德博士于2024年加入曙光研究所。里德后来成为ARI的负责人。",
+          "prediction": "Eleanor Reed博士于2024年加入曙光研究所，后来成为ARI的主任。",
+          "chrf": 45.58355125750734,
+          "missing_required_terms": [
+            "负责人",
+            "里德"
+          ],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [
+            "entity_consistency",
+            "entity_consistency"
+          ],
+          "critical": false
+        },
+        {
+          "id": "test-en-zh-long-01",
+          "split": "test",
+          "direction": "en-zh",
+          "category": "long_syntax",
+          "source": "The archive, whose oldest records had survived fire, flood, and three changes of government, remained closed because no curator was willing to certify that its fragile catalog was complete.",
+          "reference": "这座档案馆最古老的记录经历了火灾、洪水和三次政权更迭仍保存至今，但由于没有馆员愿意确认其脆弱的目录完整无缺，档案馆一直没有开放。",
+          "prediction": "最古老的记录在火灾、洪水和三次政府更迭中幸存下来的档案仍然关闭，因为没有一个馆长愿意证明它的脆弱目录是完整的。",
+          "chrf": 20.685975078207814,
+          "missing_required_terms": [
+            "档案馆"
+          ],
+          "missing_terminology": [],
+          "forbidden_hits": [],
+          "missing_preserve": [],
+          "missing_numbers": [],
+          "quality_issues": [
+            "long_paragraph",
+            "complex_syntax"
+          ],
+          "critical": false
+        }
+      ],
+      "review": {
+        "enabled": false,
+        "summary": "质量检测 7 段，触发审校 6 段，成功 0 段，回退 0 段",
+        "stats": {
+          "examined": 7,
+          "triggered": 6,
+          "reviewed": 0,
+          "fallback": 0,
+          "cache_hits": 0,
+          "reasons": {
+            "ambiguous_term": 4,
+            "forbidden_literalism": 1,
+            "entity_consistency": 2,
+            "long_paragraph": 1,
+            "complex_syntax": 1
+          },
+          "fallback_reasons": {}
+        }
+      }
+    }
+  }
+}

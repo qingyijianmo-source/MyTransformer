@@ -1,0 +1,5 @@
+# Optional dependencies for the local 4-bit Qwen reviewer.
+# Install after requirements-accurate.txt.
+accelerate>=1.2
+bitsandbytes>=0.45
+huggingface-hub>=0.30

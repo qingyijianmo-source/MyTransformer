@@ -2,7 +2,7 @@
 
 **简体中文 | [English](README_EN.md)**
 
-面向实际使用的 GPU 中英文互译工具：支持自动识别方向、大段文字和文档翻译、双向专业术语表、断点缓存，以及带质量门控的 OPUS-MT 微调。同时保留一套从基础算子搭建的 Transformer，供学习网络结构和训练流程。
+面向实际使用的 GPU 中英文互译工具：使用 OPUS-MT 快速初译，只把低置信度段落交给可选的本地 4-bit Qwen 审校器；支持大段文字、文档级术语上下文、断点缓存，以及带综合质量门控的 OPUS-MT 微调。同时保留一套从基础算子搭建的 Transformer，供学习网络结构和训练流程。
 
 > 本仓库是基于 [K2etn/MyTransformer](https://github.com/K2etn/MyTransformer) 的二次开发，不是上游项目的官方版本。上游的手写 Transformer 代码与署名完整保留；本仓库新增了实际翻译、文档处理、GPU 微调、质量验证和图形界面。
 
@@ -10,7 +10,7 @@
 
 | 路线 | 适合场景 | 模型 | 主要入口 |
 |---|---|---|---|
-| **高精度文档互译（推荐）** | 中英大段文字、DOCX、TXT、Markdown | 两个方向各使用 7,794 万参数 OPUS-MT，可分别微调 | `start_accurate_translator.cmd` |
+| **高精度文档互译（推荐）** | 中英大段文字、DOCX、TXT、Markdown | 7,794 万参数 OPUS-MT + 可选 4-bit Qwen3-4B 审校 | `start_accurate_translator.cmd` |
 | **手写 Transformer 实验** | 学习注意力、编码器/解码器、训练与强化学习 | 从零训练的自定义 Transformer | `train_test.py` / `fast_rl_pipeline.py` |
 
 两条路线相互独立：训练手写模型不会改变高精度翻译界面；增强 OPUS-MT 也不会覆盖手写模型检查点。
@@ -23,11 +23,14 @@
 - DOCX 保留段落、标题、列表、表格、图片、页眉和页脚。
 - NVIDIA GPU + FP16 批处理，默认使用 5 路 Beam Search。
 - 优先保留完整段落上下文，仅在超过 Token 上限时按句组合切分。
+- 自动检测长难句、多义词、重复、未翻译残留、异常长度和数字/缩写丢失，只审校疑难段落。
+- 审校失败、超时、返回格式异常或遗漏事实时自动退回 OPUS 初译，文档任务继续运行。
+- 翻译前抽取文档专名、缩写和术语，并向审校器传递相邻段落上下文。
 - `glossary.json` 与 `glossary.en_zh.json` 分别维护两个方向的术语。
 - 英译中支持带语境条件的多义词消歧，避免建筑 `mortar` 被机械译成“迫击炮”。
 - JSONL 断点缓存，中断后可继续文档翻译。
 - OPUS-MT 低学习率微调，实时显示 loss、进度、显存和 ETA。
-- 独立验证集质量门控：候选模型退化时不会替换当前模型。
+- 独立验证集综合质量门控：chrF++、普通句、术语、数字、严重错误与 loss 任一不合格都不会替换当前模型。
 
 ## 快速开始
 
@@ -36,6 +39,14 @@
 ```powershell
 python -m pip install -r requirements-accurate.txt
 ```
+
+首次启用“自动深度审校”还需要执行一次：
+
+```powershell
+.\prepare_local_reviewer.cmd
+```
+
+它会安装 4-bit 依赖并下载 `Qwen/Qwen3-4B-Instruct-2507` 到本机缓存。未准备审校器时仍可正常使用 OPUS-MT，疑难段落会自动回退初译。
 
 需要训练原始手写模型时，再安装：
 
@@ -109,13 +120,25 @@ python prepare_corpus.py
 
 默认配置针对 RTX 4060 Laptop 8GB：
 
-- 从本地语料选择 12,000 对清洗、去重后的训练句对；
+- 从本地语料选择 12,000 对清洗、去重、黑名单过滤后的训练句对，并限制军事等偏科领域占比；
 - 另外保留 256 对独立验证数据；
 - FP16、微批量 8、梯度累积 4，每个方向 20 轮（7,500 个优化步骤）；
 - 每 375 步（每轮）保存恢复断点，日志实时显示轮次、loss、显存与 ETA；
-- 每轮运行独立验证并保留最佳轮，最终只启用 20 轮中不低于训练起点的最佳权重。
+- 每轮运行独立验证、保留最佳轮并早停；最终还必须通过冻结评测集的综合指标才会启用。
 
-当前开发机的留出集验收结果：中译英 `1.60919 → 1.53671`，英译中 `2.39090 → 2.28609`。这些是本地质量门控结果，不代表通用公开基准。两个方向的增强权重分别保存在 `output/accurate_finetuned/best` 和 `output/accurate_finetuned_en_zh/best`，不会提交到 Git。
+仓库中的当前 `best` 权重仍是早期短程候选；20 轮配置只有完整运行并通过新质量门后才会取代它。冻结测试基线保存在 `eval/baselines/opus_context_v1.json`，不能把训练 loss 当成最终翻译准确率。两个方向的增强权重分别保存在 `output/accurate_finetuned/best` 和 `output/accurate_finetuned_en_zh/best`，不会提交到 Git。
+
+运行冻结评测：
+
+```powershell
+python evaluate_translations.py --direction both --split test --reviewer off
+python evaluate_translations.py --direction both --split test --reviewer on `
+  --baseline eval\baselines\opus_context_v1.json
+```
+
+当前 RTX 4060 8GB 冻结测试结果：中译英 chrF++ `68.52 → 76.22`，英译中 `31.16 → 37.19`；两个方向的术语准确率、数字/专名保留率均为 `100%`，严重错译数为 `0`，配对 bootstrap 的 95% 区间下界均大于 0。测试集规模仍较小，这些数字用于项目回归，不等同于大型公开基准。
+
+如需研究对照，可运行 `evaluate_nllb_baseline.py --direction en-zh --allow-download`。NLLB-600M 仅作为离线基线：其模型卡注明 CC BY-NC、研究用途且输入上限为 512 Token，不进入默认文档翻译管线。
 
 ## 与上游版本的区别
 
@@ -143,6 +166,11 @@ MyTransformer/
 │   ├── config.finetune.en_zh.json   # 英译中增强训练配置
 │   ├── glossary*.json               # 双向专业术语表
 │   ├── context_rules.en_zh.json      # 英译中语境消歧与危险错译修复
+│   ├── translation_quality.py        # 低置信度检测、事实保护、文档上下文
+│   ├── local_reviewer.py             # 4-bit Qwen 审校与安全回退
+│   ├── translation_eval.py           # chrF++、术语、保留率和晋级门
+│   ├── eval/                         # 冻结评测集和当前基线
+│   ├── tests/                        # CPU 回归测试
 │   ├── start_accurate_translator.cmd
 │   └── start_accurate_finetune*.cmd
 ├── 手写模型实验
@@ -173,7 +201,7 @@ python smoke_test.py
 
 ## 已知边界
 
-- 单个段落会尽量整体翻译；超长段落和跨段指代仍受模型上下文上限约束。
+- 审校器按需加载时速度会下降；RTX 4060 8GB 默认使用 4-bit 和有限上下文以避免 OOM。
 - PDF、扫描件 OCR、复杂文本框和脚注尚未接入当前入口。
 - 通用模型不能保证法律、医疗、合同等高风险内容无需人工复核。
 - GitHub 仓库不包含训练检查点；首次切换到某个方向时下载对应基础模型，本地微调后生成增强权重。
@@ -182,7 +210,8 @@ python smoke_test.py
 
 - 上游项目：[K2etn/MyTransformer](https://github.com/K2etn/MyTransformer)
 - 预训练模型：[中译英 opus-mt-zh-en](https://huggingface.co/Helsinki-NLP/opus-mt-zh-en) / [英译中 opus-mt-en-zh](https://huggingface.co/Helsinki-NLP/opus-mt-en-zh)
+- 可选审校模型：[Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507)（Apache 2.0）
 - Transformer 论文：[Attention Is All You Need](https://arxiv.org/abs/1706.03762)
-- 训练语料来源包括 [OPUS](https://opus.nlpl.eu/) 与 IWSLT；请分别遵守相应数据集许可。
+- 训练语料来源包括 [OPUS](https://opus.nlpl.eu/) 与 IWSLT；IWSLT 本地元数据标注为 CC BY-NC-ND，OPUS-100 没有统一覆盖全部子语料的许可证，必须分别核验后使用。
 
-代码按 [MIT License](LICENSE) 发布。上游版权声明与本仓库修改者声明均保留在许可证中。
+代码按 [MIT License](LICENSE) 发布；该许可证不自动覆盖下载的模型、微调权重或训练语料。上游版权声明与本仓库修改者声明均保留在许可证中。
