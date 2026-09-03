@@ -7,7 +7,13 @@ from pathlib import Path
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
-_default_cache = Path(PROJECT_DIR.anchor) / "MyTransformer_HF_Cache"
+# Keep the Windows default on the project drive, while avoiding an
+# unwritable filesystem root on Linux CI runners.
+_default_cache = (
+    Path(PROJECT_DIR.anchor) / "MyTransformer_HF_Cache"
+    if os.name == "nt"
+    else PROJECT_DIR / ".hf_cache"
+)
 HF_CACHE_DIR = Path(os.environ.get("MYTRANSFORMER_HF_CACHE", str(_default_cache)))
 
 

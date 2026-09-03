@@ -17,12 +17,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-import torch
 from cache_config import configure_huggingface_cache
 
 configure_huggingface_cache()
 
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+# Heavy model dependencies are loaded only when a translator instance is
+# created. This keeps lightweight rule/evaluation tests runnable without a
+# PyTorch installation or a model download.
+torch = None
+AutoModelForSeq2SeqLM = None
+AutoTokenizer = None
 
 from document_translation import (
     atomic_write_text as _atomic_write_text,
@@ -181,6 +185,22 @@ class AccurateTranslator:
         direction: str = "zh-en",
         reviewer_enabled: Optional[bool] = None,
     ):
+        global torch, AutoModelForSeq2SeqLM, AutoTokenizer
+        if torch is None or AutoModelForSeq2SeqLM is None or AutoTokenizer is None:
+            try:
+                import torch as torch_module
+                from transformers import (
+                    AutoModelForSeq2SeqLM as model_class,
+                    AutoTokenizer as tokenizer_class,
+                )
+            except (ImportError, AttributeError) as error:
+                raise RuntimeError(
+                    "本地翻译需要安装 torch、transformers 和 sentencepiece；"
+                    "仅运行规则测试时无需创建 AccurateTranslator。"
+                ) from error
+            torch = torch_module
+            AutoModelForSeq2SeqLM = model_class
+            AutoTokenizer = tokenizer_class
         self.config_path = config_path.resolve()
         self.direction = normalize_direction(direction)
         self.settings = TranslatorSettings.from_file(self.config_path, self.direction)
@@ -475,6 +495,8 @@ class AccurateTranslator:
 
     @staticmethod
     def _select_device(requested: str) -> torch.device:
+        if torch is None:
+            raise RuntimeError("PyTorch 尚未加载；请先创建 AccurateTranslator 实例")
         if requested == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("配置要求 CUDA，但当前 PyTorch 无法使用 CUDA")
         if requested == "cpu":
