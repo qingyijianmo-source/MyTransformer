@@ -66,6 +66,43 @@
         "forbidden_output_any": ["脖子上呼吸", "脖子呼吸"]
     },
     {
+        "source": "moving the goalposts",
+        "rewrite": "changing the criteria",
+        "target": "不断改变标准",
+        "aliases": ["把球门搬来搬去", "移动球门", "挪动目标", "改变目标"],
+        "forbidden_output_any": ["把球门", "移动球门", "搬动目标"]
+    },
+    {
+        "source": "spinning our wheels",
+        "rewrite": "making no progress",
+        "target": "原地打转",
+        "aliases": ["转动我们的轮子", "在轮子上打转", "原地转圈"],
+        "unless_any": ["car", "tire", "engine", "traction", "road", "vehicle", "motor", "wheelchair"],
+        "forbidden_output_any": ["转动我们的轮子", "轮子上打转"]
+    },
+    {
+        "source": "Tell me about it",
+        "rewrite": "I completely agree",
+        "target": "可不是嘛",
+        "aliases": ["告诉我吧", "跟我说说", "告诉我关于它"],
+        "unless_any": ["details", "explain", "report", "story", "incident", "topic", "what happened"],
+        "forbidden_output_any": ["告诉我", "跟我说说"]
+    },
+    {
+        "source": "hit the ground running",
+        "rewrite": "start working effectively immediately",
+        "target": "一开始就全力以赴",
+        "aliases": ["撞上地面奔跑", "击中地面后奔跑", "从地面跑起来"],
+        "forbidden_output_any": ["撞上地面", "击中地面"]
+    },
+    {
+        "source": "put your foot down",
+        "rewrite": "take a firm stand",
+        "target": "坚决反对",
+        "aliases": ["把你的脚放下", "放下你的脚", "把脚踩下去"],
+        "forbidden_output_any": ["把你的脚", "放下你的脚"]
+    },
+    {
         "source": "server",
         "rewrite": "restaurant server",
         "target": "服务员",

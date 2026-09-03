@@ -18,4 +18,6 @@ jobs:
       - name: Compile all Python modules
         run: python -m compileall -q .
       - name: Run CPU tests
-        run: pytest
+        # Invoke pytest through the configured interpreter so the repository
+        # root is on sys.path and top-level project modules are importable.
+        run: python -m pytest
